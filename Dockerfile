@@ -3,14 +3,14 @@ FROM python:3.11.11-slim-bookworm
 #Install container dependencies
 RUN apt-get update
 RUN apt-get install -y --no-install-recommends build-essential python3-dev libxml2-dev libffi-dev
-RUN apt-get install -y gcc g++ libxml2 libxslt-dev libusb-dev libpcsclite-dev i2c-tools
+RUN apt-get install -y gcc g++ libxml2 libxslt-dev libusb-dev libpcsclite-dev i2c-tools wget
 RUN apt-get install -y --upgrade python3-setuptools
 RUN apt-get install --fix-broken
 
 # Set the working directory in the container
 WORKDIR /app
 
-COPY libnfc-1.8.0.tar.bz2 /app
+RUN wget https://github.com/nfc-tools/libnfc/releases/download/libnfc-1.8.0/libnfc-1.8.0.tar.bz2
 RUN tar -xf libnfc-1.8.0.tar.bz2
 RUN ./libnfc-1.8.0/configure --prefix=/usr --sysconfdir=/etc
 RUN make

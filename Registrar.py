@@ -52,7 +52,6 @@ class Registrar:
             release_date = album['release_date']
             spotify_uri = album['uri']
             album_art = album['images'][0]['url']
-            print(album_art)
 
             # Get album tracks
             tracks_results = self.spotify.album_tracks(album_id)
