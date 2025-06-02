@@ -26,11 +26,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 ADD . /app
 
 #Add executable perms for the run.sh script
-RUN chmod a+x run.sh
+RUN chmod +x run.sh
 
 # Run app.py when the container launches
 CMD ["./run.sh"]
-
 #Run command
 #/home/album/album_db 
 #docker run -v /home/album/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest

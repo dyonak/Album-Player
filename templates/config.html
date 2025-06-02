@@ -13,41 +13,43 @@
 <h1>Album Player Config Editor</h1>
 <form id="config-form">
   {% for key, value in config.items() %}
-  <div class="form-group row">
-    <label class="form-control-label col-sm-2 col-form-label" for="{{ key }}"
-      >{{ key|replace('_', ' ')|title }}</label
-    >
-    <div class="col-sm-10">
-      {% if value is string %}
-      <input
-        type="text"
-        class="form-control"
-        id="{{ key }}"
-        name="{{ key }}"
-        value="{{ value }}"
-      />
-      {% elif value is number %}
-      <input
-        type="number"
-        class="form-control"
-        id="{{ key }}"
-        name="{{ key }}"
-        value="{{ value }}"
-      />
-      {% elif value is boolean %}
-      <select class="form-control" id="{{ key }}" name="{{ key }}">
-        <option value="true" {% if value %}selected{% endif %}>True</option>
-        <option value="false" {% if not value %}selected{% endif %}>
-          False
-        </option>
-      </select>
-      {% else %}
-      <textarea class="form-control" id="{{ key }}" name="{{ key }}" rows="3">
-{{ value }}</textarea
+    {% if loop.index <= 3 %}
+    <div class="form-group row">
+      <label class="form-control-label col-sm-2 col-form-label" for="{{ key }}"
+        >{{ key|replace('_', ' ')|title }}</label
       >
-      {% endif %}
+      <div class="col-sm-10">
+        {% if value is string %}
+        <input
+          type="text"
+          class="form-control"
+          id="{{ key }}"
+          name="{{ key }}"
+          value="{{ value }}"
+        />
+        {% elif value is number %}
+        <input
+          type="number"
+          class="form-control"
+          id="{{ key }}"
+          name="{{ key }}"
+          value="{{ value }}"
+        />
+        {% elif value is boolean %}
+        <select class="form-control" id="{{ key }}" name="{{ key }}">
+          <option value="true" {% if value %}selected{% endif %}>True</option>
+          <option value="false" {% if not value %}selected{% endif %}>
+            False
+          </option>
+        </select>
+        {% else %}
+        <textarea class="form-control" id="{{ key }}" name="{{ key }}" rows="3">
+  {{ value }}</textarea
+        >
+        {% endif %}
+      </div>
     </div>
-  </div>
+    {% endif %}
   {% endfor %}
   <button type="submit" class="btn btn-primary">Save</button>
 </form>
