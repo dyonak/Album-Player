@@ -16,32 +16,26 @@
 from time import sleep
 import requests
 from NFCPoller import NFCPoller
-from DBConnector import DBConnector
 from Registrar import Registrar
 from SonosController import SonosController
 import Webapp
 import json
 import socket
+import config
 
-configfile = open('./config.json')
-data = json.load(configfile)
-SERVICE = data["service"]
-VOLUME = data["volume"]
-PLAYER = data["player"]
-PORT = data["port"]
 HOSTNAME = socket.gethostname()
+config = config.Config()
 
 if __name__ == "__main__":
 
     nfc = NFCPoller()
-    db = DBConnector()
     sc = SonosController()
     reg = Registrar()
 
     while True:
         nfc.poll()
         print(f'Poll complete\nCurrent:{nfc.tag}\nPrevious:{nfc.last_tag}')
-        sleep(1.0) #Wait long enough for the device timeout
+        sleep(0.7) #Wait long enough for the device timeout
 
         #No tag present but previous poll had a tag, album was removed - stop the playing
         if nfc.tag == None and nfc.last_tag:
@@ -63,7 +57,7 @@ if __name__ == "__main__":
         if result != None:
             sc.play_album(result[4])
         else:
-            sc.play_mp3(f"http://{HOSTNAME}:3029/audio/detected.mp3")
+            sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/detected.mp3")
             album = None
             playing = []
             while not album:
@@ -76,7 +70,7 @@ if __name__ == "__main__":
                     #Album has been playing for over 10 seconds, this seems intentional
                     album = reg.lookup_album(playing[-1]['artist'] + " " + playing[-1]['album'])
                     reg.add_album_to_db(album, nfc.tag)
-                    sc.play_mp3(f"http://{HOSTNAME}:3029/audio/registered.mp3")
+                    sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/registered.mp3")
 
                     #Pause long enough for the registered message to play
                     sleep(5.0)
@@ -87,5 +81,5 @@ if __name__ == "__main__":
                         sc.play_album(result[4])
 
                 if len(playing) > 30: #We've been waiting over 1.5 minutes, let the user know the registration process has timed out
-                    sc.play_mp3(f"http://{HOSTNAME}:3029/audio/timeout.mp3")
+                    sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/timeout.mp3")
                     break

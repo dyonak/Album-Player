@@ -3,7 +3,7 @@ FROM python:3.11.11-slim-bookworm
 #Install container dependencies
 RUN apt-get update
 RUN apt-get install -y --no-install-recommends build-essential python3-dev libxml2-dev libffi-dev
-RUN apt-get install -y gcc g++ libxml2 libxslt-dev libusb-dev libpcsclite-dev i2c-tools wget
+RUN apt-get install -y gcc g++ libxml2 libxslt-dev libusb-dev libpcsclite-dev wget
 RUN apt-get install -y --upgrade python3-setuptools
 RUN apt-get install --fix-broken
 
@@ -24,6 +24,7 @@ COPY requirements.txt /app
 RUN pip install --no-cache-dir -r requirements.txt
 
 ADD . /app
+VOLUME /db
 
 #Add executable perms for the run.sh script
 RUN chmod +x run.sh
@@ -32,4 +33,4 @@ RUN chmod +x run.sh
 CMD ["./run.sh"]
 #Run command
 #/home/album/album_db 
-#docker run -v /home/album/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest
+#docker run -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest

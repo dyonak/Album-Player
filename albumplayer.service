@@ -3,9 +3,8 @@ Description=Album Player App
 After=network.target
 
 [Service]
-User=album
-WorkingDirectory=/home/album/Album-Player
-ExecStart=/home/album/Album-Player/my_venv/bin/python3 AlbumPlayer.py
+WorkingDirectory=/home/dyonak/Album-Player-Standalone
+ExecStart=/home/dyonak/Album-Player-Standalone/myvenv/bin/python3 AlbumPlayer.py
 Restart=on-failure
 
 [Install]

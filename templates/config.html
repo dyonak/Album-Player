@@ -12,13 +12,13 @@
 {% endblock %} {% block content %}
 <h1>Album Player Config Editor</h1>
 <form id="config-form">
-  {% for key, value in config.items() %}
-    {% if loop.index <= 3 %}
-    <div class="form-group row">
-      <label class="form-control-label col-sm-2 col-form-label" for="{{ key }}"
-        >{{ key|replace('_', ' ')|title }}</label
-      >
-      <div class="col-sm-10">
+  {# Display and allow editing of the first 3 config items #}
+  {% for key, value in (config.items() | list)[0:3] %}
+  <div class="form-group row">
+      <label class="form-control-label col-form-label col-sm-2" for="{{ key }}">
+        {{ key|replace('_', ' ')|title }}
+      </label>
+      <div class="col-sm-7">
         {% if value is string %}
         <input
           type="text"
@@ -38,51 +38,90 @@
         {% elif value is boolean %}
         <select class="form-control" id="{{ key }}" name="{{ key }}">
           <option value="true" {% if value %}selected{% endif %}>True</option>
-          <option value="false" {% if not value %}selected{% endif %}>
-            False
-          </option>
+          <option value="false" {% if not value %}selected{% endif %}>False</option>
         </select>
         {% else %}
-        <textarea class="form-control" id="{{ key }}" name="{{ key }}" rows="3">
-  {{ value }}</textarea
-        >
+        <textarea class="form-control" id="{{ key }}" name="{{ key }}" rows="3">{{ value }}</textarea>
         {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+  {# Add hidden inputs for the remaining config items to retain them on save #}
+  {% for key, value in (config.items() | list)[3:] %}
+  <input type="hidden" name="{{ key }}" value="{{ value }}">
+  {% endfor %}
+  <br />
+  <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#confirmationModal">Save</button>
+</form>
+
+<div class="modal fade" id="confirmationModal" tabindex="-1" aria-labelledby="confirmationModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirmationModalLabel">Confirm Save</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to save these changes?
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-button">Confirm</button>
       </div>
     </div>
-    {% endif %}
-  {% endfor %}
-  <button type="submit" class="btn btn-primary">Save</button>
-</form>
+  </div>
+</div>
 {% endblock %} {% block scripts %}
 <script>
-  const form = document.getElementById("config-form");
-  form.addEventListener("submit", function (event) {
-    event.preventDefault();
-    const formData = new FormData(form);
-    const jsonData = {};
-    for (const [key, value] of formData.entries()) {
-      try {
-        jsonData[key] = JSON.parse(value);
-      } catch {
-        jsonData[key] = value;
-      }
-    }
+  const form = document.getElementById("config-form");
+  const confirmButton = document.getElementById("confirm-button");
+  const confirmationModalElement = document.getElementById("confirmationModal");
+  const confirmationModal = new bootstrap.Modal(confirmationModalElement);
 
-    fetch("/save", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(jsonData),
-    })
-      .then((response) => response.json())
-      .then((data) => {
-        if (data.status === "success") {
-          alert("Config saved successfully!");
-        } else {
-          alert("Error saving config: " + data.message);
-        }
-      });
-  });
+  confirmButton.addEventListener("click", function () {
+    submitForm();
+    confirmationModal.hide(); // Hide the modal after confirmation
+  });
+
+  function submitForm() {
+    const formData = new FormData(form);
+    const jsonData = {};
+    for (const [key, value] of formData.entries()) {
+      try {
+        // Attempt to parse the value as JSON first.
+        // This will correctly parse "true", "false", "123", "[1,2]", "{"a":1}"
+        jsonData[key] = JSON.parse(value);
+      } catch (e) {
+        // If JSON.parse fails (e.g., for a regular string like "hello world",
+        // or if a number like "123" is parsed and then converted back to a string,
+        // it indicates it's a plain string that wasn't meant to be JSON.
+        // In this case, use the value as a plain string.
+        jsonData[key] = value;
+      }
+    }
+
+    fetch("/save", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(jsonData),
+    })
+      .then((response) => {
+        if (response.ok) {
+          return response.json();
+        } else {
+          throw new Error('Network response was not ok.');
+        }
+      })
+      .then(data => {
+        console.log("Save successful:", data);
+        // Optionally: show a success message or redirect
+      })
+      .catch(error => {
+        console.error("Error saving config:", error);
+        // Optionally: show an error message
+      });
+  }
 </script>
 {% endblock %}

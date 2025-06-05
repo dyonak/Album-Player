@@ -3,13 +3,12 @@ import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import json
 import logging
-from DBConnector import DBConnector
-from flask import g
+import DBConnector
 
 logging.basicConfig(level=logging.INFO)
 
 class Registrar:
-    def __init__(self, config_file="config.json"):
+    def __init__(self, config_file="./config.json"):
         try:
             with open(config_file, 'r') as f:
                 data = json.load(f)
@@ -23,11 +22,6 @@ class Registrar:
         self.spotify_auth = SpotifyClientCredentials(data["service_api_id"], data["service_api_secret"])
         self.spotify = spotipy.Spotify(client_credentials_manager=self.spotify_auth)
 
-    def get_db(self):
-        """Get the database connection for the current request."""
-        if 'db' not in g:
-            g.db = DBConnector()
-        return g.db
 
     def lookup_album(self, album_title):
         """
@@ -52,6 +46,7 @@ class Registrar:
             release_date = album['release_date']
             spotify_uri = album['uri']
             album_art = album['images'][0]['url']
+            print(album_art)
 
             # Get album tracks
             tracks_results = self.spotify.album_tracks(album_id)
@@ -143,11 +138,8 @@ class Registrar:
         if tag is None:
             logging.error("Cannot lookup tag: tag is None")
             return
-        
-        db = DBConnector()
-        db.connect()
-        result = db.get_album(tag)
-        db.close()
+
+        result = DBConnector.get_album(tag)
 
         if result:
             return result
@@ -165,10 +157,9 @@ class Registrar:
         if album_data is None:
             logging.error("Cannot add album to database: album_data is None")
             return
-        db = DBConnector()
-        db.connect()
+        
         try:
-            db.add_album(
+            DBConnector.add_album(
                 album_data['artist'],
                 album_data['album_name'],
                 album_data['release_date'],
@@ -178,9 +169,7 @@ class Registrar:
                 album_data['album_art']
             )
             logging.info(f"Album '{album_data['album_name']}' added to database with NFC ID: {nfc_id}")
-            db.close()
         except Exception as e:
-            db.close()
             logging.error(f"Error adding album to database: {e}")
 
     def register_album(self, album):

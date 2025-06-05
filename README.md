@@ -100,8 +100,7 @@ sudo usermod -aG docker [user_name]
 
 exit and reconnect to ssh (needs to be done to re-validate your user's groups)
 ```
-mkdir ~/albumplayerdb && cd ~/albumplayerdb
-docker run -d --restart always --privileged --net=host --volume ${PWD}:/app/db dyonak/albumplayer:latest
+docker run -d --restart always --privileged --net=host dyonak/albumplayer:latest
 ```
 
 - Verify this by going to hostname.local:3029 in a browser on the same network

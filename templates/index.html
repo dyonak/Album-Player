@@ -10,22 +10,6 @@
       width: 75px !important;
     }
   }
-  .sortable {
-    cursor: pointer;
-  }
-  .sortable::after {
-    content: "\2195"; /* Double up/down arrow */
-    margin-left: 5px;
-    opacity: 0.3;
-  }
-  .sortable.asc::after {
-    content: "\2191"; /* Up arrow */
-    opacity: 1;
-  }
-  .sortable.desc::after {
-    content: "\2193"; /* Down arrow */
-    opacity: 1;
-  }
 </style>
 {% endblock %} {% block content %}
 <h1>Your Music</h1>
@@ -34,10 +18,10 @@
     <thead>
       <tr>
         <th>Album Details</th>
-        <th class="sortable hide-on-mobile" data-column="play_count">
+        <th class="hide-on-mobile" data-column="play_count">
           Play Count
         </th>
-        <th class="sortable hide-on-mobile" data-column="last_played_date">
+        <th class="hide-on-mobile" data-column="last_played_date">
           Last Played
         </th>
         <th></th>
@@ -79,7 +63,7 @@
             class="btn btn-danger delete-album-btn"
             data-album-uri="{{ album.spotify_uri }}"
           >
-            Delete
+          <span class="bi-trash"></span>&nbsp;Delete
           </button>
         </td>
       </tr>
@@ -101,14 +85,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="deleteModalLabel">Confirm Delete</h5>
-        <button
-          type="button"
-          class="close"
-          data-bs-dismiss="modal"
-          aria-label="Close"
-        >
-          <span aria-hidden="true">&times;</span>
-        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">Are you sure you want to delete this album?</div>
       <div class="modal-footer">
@@ -124,6 +101,8 @@
 </div>
 {% endblock %} {% block scripts %}
 <script>
+
+  // Handle album art clicks - play the album
   document.addEventListener('DOMContentLoaded', function() {
     const playAlbumLinks = document.querySelectorAll('.play-album-link'); // Or select your links appropriately
 
@@ -166,10 +145,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
       const table = document.getElementById("albumTable");
-      const headers = table.querySelectorAll("th.sortable");
       const tbody = table.querySelector("tbody");
-      let sortColumn = null;
-      let sortDirection = "asc";
       let albumToDeleteUri = null; // Store the album URI to delete
       const deleteModalElement = document.getElementById("deleteModal");
       const deleteModal = new bootstrap.Modal(deleteModalElement);
@@ -216,75 +192,6 @@
               albumToDeleteUri = null; // Reset the URI when canceling
           });
       }
-
-      // --- Sorting Implementation ---
-      function sortTable(column, direction) {
-          const rows = Array.from(tbody.querySelectorAll("tr"));
-          const sortMultiplier = direction === "asc" ? 1 : -1;
-
-          const sortedRows = rows.sort((rowA, rowB) => {
-              const cellA = rowA.querySelector(`[data-column="${column}"]`) || rowA.querySelector(`td:nth-child(${getColumnIndex(column) + 1})`);
-              const cellB = rowB.querySelector(`[data-column="${column}"]`) || rowB.querySelector(`td:nth-child(${getColumnIndex(column) + 1})`);
-
-              if (!cellA || !cellB) {
-                  return 0; // Handle cases where the column doesn't exist in a row
-              }
-
-              const valueA = cellA.textContent.trim();
-              const valueB = cellB.textContent.trim();
-
-              let comparison = 0;
-              if (column === "play_count") {
-                  comparison = (parseInt(valueA) - parseInt(valueB)) * sortMultiplier;
-              } else if (column === "last_played_date") {
-                  const dateA = valueA === "None" ? new Date(0) : new Date(valueA);
-                  const dateB = valueB === "None" ? new Date(0) : new Date(valueB);
-                  comparison = (dateA - dateB) * sortMultiplier;
-              } else {
-                  comparison = valueA.localeCompare(valueB) * sortMultiplier;
-              }
-              return comparison;
-          });
-
-          // Remove existing rows and append the sorted rows
-          while (tbody.firstChild) {
-              tbody.removeChild(tbody.firstChild);
-          }
-          sortedRows.forEach((row) => tbody.appendChild(row));
-      }
-
-      function getColumnIndex(columnName) {
-          const headerCells = Array.from(table.querySelectorAll("thead th"));
-          const index = headerCells.findIndex(th => th.dataset.column === columnName);
-          return index;
-      }
-
-      // Add click event listeners to headers
-      headers.forEach((header) => {
-          header.addEventListener("click", () => {
-              const column = header.dataset.column;
-
-              // Reset sorting indicators
-              headers.forEach((h) => {
-                  if (h !== header) {
-                      h.classList.remove("asc", "desc");
-                  }
-              });
-
-              if (sortColumn === column) {
-                  sortDirection = sortDirection === "asc" ? "desc" : "asc";
-                  header.classList.toggle("asc", sortDirection === "asc");
-                  header.classList.toggle("desc", sortDirection === "desc");
-              } else {
-                  sortColumn = column;
-                  sortDirection = "asc";
-                  header.classList.add("asc");
-                  header.classList.remove("desc");
-              }
-
-              sortTable(column, sortDirection);
-          });
-      });
   });
 </script>
 {% endblock %}
