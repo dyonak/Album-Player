@@ -99,10 +99,15 @@ sudo sh ./get-docker.sh
 sudo usermod -aG docker [user_name]
 
 exit and reconnect to ssh (needs to be done to re-validate your user's groups)
+```
+mkdir ~/albumplayerdb && cd ~/albumplayerdb
+docker run -d --restart always --privileged --net=host --volume ${PWD}:/app/db dyonak/albumplayer:latest
+```
 
-docker run --privileged --net=host dyonak/albumplayer:latest
 - Verify this by going to hostname.local:3029 in a browser on the same network
 - You should also see NFC cards getting read in the output if you put one near the reader
+
+
 
 ## Usage
 All of this is assuming you've built some type of device that allows for an album with an NFC sticker tag, or other similar object with a NFC tag, to be placed so that it can be read by the NFC reader that you've configured. 
