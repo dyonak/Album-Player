@@ -3,7 +3,6 @@ sudo apt-get update && sudo apt-get -y upgrade
 
 #Install pip and setup python venv
 sudo apt-get install -y python3-pip git
-python3 -m pip install --upgrade pip
 
 #enable SPI
 sudo dtparam spi=on
@@ -13,7 +12,8 @@ sudo dtparam spi=on
 cd ~
 git clone https://github.com/dyonak/PifiConnector
 cd ~/PifiConnector
-python -m venv wifivenv
+python3 -m venv wifivenv
+source wifivenv/bin/activate
 pip install flask requests
 
 #Create and enable the service
@@ -27,6 +27,7 @@ sudo systemctl start wificonnect.service
 mkdir ~/docker && cd ~/docker
 curl -fsSL https://get.docker.com -o get-docker.sh
 chmod +x get-docker.sh
+./get-docker.sh
 sudo usermod -aG docker %{USER}
 ##### WILL NEED TO exit SSH session and reconnect for this to take effect
 #After reconnecting run
