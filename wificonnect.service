@@ -3,8 +3,8 @@ Description=Album Player Wifi Config
 After=network.target
 
 [Service]
-WorkingDirectory=/home/album/Album-Player
-ExecStart=/home/album/Album-Player/my_venv/bin/python3 wificonnect.py
+WorkingDirectory=/home/USERNAME/PifiConnector
+ExecStart=/home/USERNAME/PifiConnector/wifivenv/bin/python3 wificonnect.py
 Restart=on-failure
 
 [Install]
