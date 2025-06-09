@@ -208,15 +208,15 @@ def check_internet_connection(iface):
     # unless connectivity is clearly "none".
     try:
         status_output = run_command(["nmcli", "general", "status"], timeout=5, check=True)
-        if status_output:
-            # Extract the first line which contains the connectivity state
-            first_line = status_output.splitlines()[0] if status_output.splitlines() else ""
-            print(f"NetworkManager general status: {first_line}")
-            if "connectivity: none" in first_line:
-                print("NetworkManager reports no connectivity. Internet check failed.")
-                return False
-            # If "full", "limited", or "portal", we still need to verify actual internet.
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # Log the status, but don't make a decision based on it yet.
+        # Ping and HTTP checks are more definitive.
+        if status_output and status_output.splitlines():
+            print(f"NetworkManager general status: {status_output.splitlines()[0]}")
+        else:
+            print("NetworkManager general status: No output or empty.")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e_nmcli:
+        # This can happen if NetworkManager is not fully ready or the command fails.
+        # It's not necessarily fatal for internet connectivity if the interface is otherwise configured.
         print("Could not get NetworkManager general status or command failed. Proceeding with ping/HTTP checks.")
     except Exception as e:
         print(f"Error during nmcli general status check: {e}. Proceeding with ping/HTTP checks.")
@@ -244,21 +244,45 @@ def check_internet_connection(iface):
         return False
 
     # HTTP check (only if at least one ping was successful)
-    try:
-        # Google's generate_204 is a standard check; it should return HTTP 204 No Content.
-        response = requests.get("http://connectivitycheck.gstatic.com/generate_204", timeout=5)
-        if response.status_code == 204:
-            print("HTTP check to Google's connectivity endpoint successful (204 No Content). Internet confirmed.")
-            return True
-        else:
-            print(f"HTTP check to Google's connectivity endpoint returned status {response.status_code} (expected 204). Internet not confirmed.")
+    http_check_url = "http://connectivitycheck.gstatic.com/generate_204"
+    http_attempts = 3
+    http_delay_between_attempts = 3 # seconds
+
+    for attempt in range(http_attempts):
+        try:
+            # Google's generate_204 is a standard check; it should return HTTP 204 No Content.
+            response = requests.get(http_check_url, timeout=5)
+            if response.status_code == 204:
+                print(f"HTTP check to {http_check_url} successful (204 No Content) on attempt {attempt+1}. Internet confirmed.")
+                return True
+            else:
+                print(f"HTTP check to {http_check_url} (attempt {attempt+1}) returned status {response.status_code} (expected 204).")
+                # If this is the last attempt, loop will end, and function will return False below.
+        except requests.exceptions.RequestException as e:
+            print(f"HTTP check to {http_check_url} (attempt {attempt+1}) failed: {e}")
+            # If this is the last attempt, loop will end, and function will return False below.
+        
+        if attempt < http_attempts - 1:
+            print(f"Waiting {http_delay_between_attempts}s before retrying HTTP check...")
+            time.sleep(http_delay_between_attempts)
+        else: # Last attempt failed or resulted in unexpected status code
+            print("All HTTP check attempts failed or did not confirm connectivity. Internet not confirmed via HTTP.")
             return False
-    except requests.exceptions.RequestException as e:
-        print(f"HTTP check failed: {e}")
+    
+    # Fallback, should ideally not be reached if the loop logic is correct and covers all cases.
         return False
 
-    # Should not be reached if logic above is correct, but as a fallback:
-    return False
+def log_network_diagnostics(iface):
+    if not iface:
+        print("Cannot log network diagnostics: no interface provided.")
+        return
+    print(f"--- Network Diagnostics for {iface} at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
+    run_command(["nmcli", "device", "status"], check=False, timeout=5)
+    run_command(["nmcli", "-p", "connection", "show", "--active"], check=False, timeout=5) # -p for pretty
+    run_command(["ip", "addr", "show", "dev", iface], check=False, timeout=5)
+    run_command(["ip", "route", "show", "dev", iface], check=False, timeout=5) # Routes specific to iface
+    run_command(["ip", "route", "show", "default"], check=False, timeout=5)    # Default routes
+    print(f"--- End Network Diagnostics for {iface} ---")
 
 dnsmasq_process = None # Global variable to hold the dnsmasq subprocess
 DNSMASQ_LOG_LINES = [] # Store recent dnsmasq log lines
@@ -318,14 +342,25 @@ def stop_access_point(iface):
     print(f"Stopping AP '{AP_CONNECTION_NAME}'...")
     if not iface: return True
     try:
+        # Explicitly disconnect the interface first to release it
+        print(f"Explicitly disconnecting interface {iface} before AP teardown.")
+        run_command(["nmcli", "device", "disconnect", iface], check=False, timeout=10)
+        time.sleep(1) # Give a moment for disconnect to take effect
+
         run_command(["nmcli", "connection", "down", AP_CONNECTION_NAME], check=False, timeout=10)
         run_command(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False, timeout=10)
-        
+
         iptables_cmd_delete = ["sudo", "iptables", "-t", "nat", "-D", "PREROUTING", "-i", iface, "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", f"{AP_IP_ADDRESS}:{FLASK_PORT}"]
         run_command(iptables_cmd_delete, check=False)
         print("Removed iptables port redirection rule (if it existed).")
 
+        # Ensure interface is set to managed so NM can use it for client connections
+        print(f"Ensuring interface {iface} is managed by NetworkManager.")
+        run_command(["nmcli", "device", "set", iface, "managed", "yes"], check=False)
+        time.sleep(1) # Give a moment for the setting to apply
+
         run_command(["nmcli", "device", "wifi", "rescan"], check=False)
+        print(f"Rescan initiated on {iface}. NetworkManager will attempt to connect to known networks.")
         return True
     except Exception as e:
         print(f"Error stopping AP: {e}")
@@ -482,32 +517,76 @@ def stop_manual_dnsmasq():
 
 
 def connect_to_target_wifi(iface, ssid, password):
-    print(f"Attempting to connect to WiFi: {ssid}")
+    print(f"Attempting to configure and connect to WiFi: {ssid}")
     if not iface: return False
+
+    # Use a consistent connection name for the target WiFi.
+    # This makes it easier to manage (e.g., delete if exists, check status).
+    # Replace non-alphanumeric characters for a valid nmcli connection name.
+    connection_name = f"target-{re.sub(r'[^a-zA-Z0-9_-]', '_', ssid)}"
+    print(f"Using NetworkManager connection name: {connection_name}")
+
     try:
+        # Ensure the interface is managed and ready
+        run_command(["nmcli", "device", "set", iface, "managed", "yes"], check=False)
         run_command(["nmcli", "device", "disconnect", iface], check=False, timeout=10)
-        time.sleep(2)
-        run_command(["nmcli", "connection", "delete", ssid], check=False, timeout=10) # Delete by SSID
         time.sleep(1)
+
+        # Delete any existing connection with this name to ensure a clean slate
+        run_command(["nmcli", "connection", "delete", connection_name], check=False, timeout=10)
+        time.sleep(1)
+        # Also try deleting by the raw SSID in case an old profile exists from a previous version
+        # or manual setup where the SSID itself was used as the connection name.
+        run_command(["nmcli", "connection", "delete", ssid], check=False, timeout=10)
+        time.sleep(1)
+
+
+        print(f"Adding new connection profile '{connection_name}' for SSID '{ssid}' with autoconnect enabled...")
+        add_cmd = [
+            "nmcli", "connection", "add",
+            "type", "wifi",
+            "con-name", connection_name,
+            "ifname", iface,
+            "ssid", ssid,
+            "connection.autoconnect", "yes", # Explicitly enable autoconnect
+            "wifi-sec.key-mgmt", "wpa-psk" # Assuming WPA-PSK, common case
+        ]
+        if password: # Only add psk if password is provided
+            add_cmd.extend(["wifi-sec.psk", password])
+        # If open networks are a primary target, this part might need adjustment
+        # e.g. add_cmd.extend(["wifi-sec.key-mgmt", "none"]) if no password
+
+        run_command(add_cmd, timeout=15) # This creates the profile
+        time.sleep(1)
+
+        print(f"Attempting to activate connection '{connection_name}'...")
+        # Use 'nmcli connection up' which is more direct for existing profiles
+        run_command(["nmcli", "connection", "up", connection_name], timeout=45)
         
-        print(f"Connecting {iface} to SSID '{ssid}'...")
-        cmd_connect = ["nmcli", "device", "wifi", "connect", ssid, "password", password, "ifname", iface]
-        run_command(cmd_connect, timeout=45)
-        
-        print("Waiting for connection to establish and verify internet (up to 30s)...")
-        for _ in range(6):
+        print(f"Connection to '{ssid}' (profile '{connection_name}') initiated. Verifying internet access (up to 30s)...")
+        internet_verified = False
+        for i in range(6): # Check for 30 seconds (6 * 5s)
             time.sleep(5)
             if check_internet_connection(iface):
-                print(f"Successfully connected to {ssid} and internet access verified.")
-                return True
+                print(f"Successfully connected to '{ssid}' and internet access verified.")
+                internet_verified = True
+                break
+            print(f"Internet check {i+1}/6 for '{ssid}' failed. Retrying...")
         
-        print(f"Connected to {ssid} but failed to verify internet access after timeout.")
-        run_command(["nmcli", "connection", "delete", ssid], check=False) # Clean up by SSID
-        return False
+        if internet_verified:
+            return True # Profile is saved with autoconnect=yes, and internet is working now.
+        else:
+            print(f"Connected to '{ssid}' (profile '{connection_name}' is saved with autoconnect=yes), "
+                  "but failed to verify internet access after timeout.")
+            print("The WiFi profile has been saved. NetworkManager will attempt to use it on next boot or if the network becomes available.")
+            # We DO NOT delete the connection here. Let it persist.
+            return False # Return False to indicate immediate internet is not available.
 
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        print(f"Failed to connect to {ssid} via nmcli.") # Error details already printed by run_command
-        run_command(["nmcli", "connection", "delete", ssid], check=False)
+        print(f"Failed to add or activate connection for {ssid} via nmcli.")
+        # Even on failure here, if 'nmcli connection add' succeeded, the profile might exist.
+        # It's probably safer to leave it for NetworkManager to handle or for manual cleanup.
+        print(f"The connection profile '{connection_name}' may or may not have been saved. Check 'nmcli connection show'.")
         return False
     except Exception as e:
         print(f"An unexpected error occurred while trying to connect to {ssid}: {e}")
@@ -527,23 +606,73 @@ def main():
     print(f"Captive Portal AP will be: SSID='{AP_SSID}', Password='{AP_PSK}'")
     print(f"Captive Portal Web UI will be at: http://{AP_IP_ADDRESS}:{FLASK_PORT}")
 
+    # --- Initial Network Check and Grace Period ---
+    # Give NetworkManager a chance to connect to known networks on startup.
+    print("Performing initial check for existing internet connection...")
+    print(f"Ensuring WiFi radio is on and {current_wifi_iface} is managed by NetworkManager.")
+    try:
+        run_command(["nmcli", "radio", "wifi", "on"], check=False) # Ensure WiFi radio is on
+        run_command(["nmcli", "device", "set", current_wifi_iface, "managed", "yes"], check=False) # Ensure NM manages the iface
+        time.sleep(2) # Give NetworkManager a moment to process these settings
+        run_command(["nmcli", "device", "wifi", "rescan"], check=False) # Trigger a scan for networks
+        print(f"Initial scan triggered on {current_wifi_iface}. Waiting for potential auto-connection...")
+        time.sleep(15) # Increased: Allow scan to initiate and potentially connect.
+    except Exception as e:
+        # These commands are best-effort at startup; script can continue if they have minor issues.
+        print(f"Warning: Error during initial interface setup for {current_wifi_iface}: {e}")
+
+    INITIAL_CONNECTION_WAIT_TOTAL = 45  # Total seconds to wait for an initial connection
+    INITIAL_CONNECTION_WAIT_INTERVAL = 5 # Seconds between checks
+    print(f"Waiting up to {INITIAL_CONNECTION_WAIT_TOTAL}s for NetworkManager to connect to a known WiFi network...")
+
+    initial_connection_established = False
+    for i in range(INITIAL_CONNECTION_WAIT_TOTAL // INITIAL_CONNECTION_WAIT_INTERVAL):
+        if check_internet_connection(current_wifi_iface):
+            print("Successfully connected to a known network with internet upon startup.")
+            initial_connection_established = True
+            break
+        print(f"Initial connection check ({i+1}/{INITIAL_CONNECTION_WAIT_TOTAL // INITIAL_CONNECTION_WAIT_INTERVAL}) failed. Waiting {INITIAL_CONNECTION_WAIT_INTERVAL}s...")
+        if i < (INITIAL_CONNECTION_WAIT_TOTAL // INITIAL_CONNECTION_WAIT_INTERVAL) - 1: # Don't sleep after the last check
+            time.sleep(INITIAL_CONNECTION_WAIT_INTERVAL)
+
+    if not initial_connection_established:
+        print(f"No internet connection established after {INITIAL_CONNECTION_WAIT_TOTAL}s grace period.")
+    else:
+        # Internet was found during the initial boot-up grace period.
+        # The script's primary job (getting initial connectivity) is done,
+        # or not needed because connectivity already exists. Stop the service.
+        print("Internet connection present on boot. Stopping wificonnect service as it's not needed.")
+        run_command(["sudo", "systemctl", "stop", "wificonnect.service"], check=False)
+        sys.exit(0)
+    # --- End of Initial Network Check ---
+
     _credentials_store = {} 
     _credentials_event = threading.Event()
     init_flask_shared_data(_credentials_event, _credentials_store, AP_SSID)
     
+    # This state variable will determine if we are in 'monitoring' or 'AP setup' mode.
+    # It's initialized by the outcome of the startup grace period.
+    internet_is_up = initial_connection_established
     flask_server_thread = None
 
     try:
         while True:
-            if check_internet_connection(current_wifi_iface):
-                print(f"Internet connection active on {current_wifi_iface}. Monitoring...")
+            if internet_is_up:
+                # We believe internet is up, or was up at the last check.
+                # Monitor for MONITOR_INTERVAL, then re-check.
+                print(f"Internet connection active or assumed. Monitoring on {current_wifi_iface} for {MONITOR_INTERVAL}s...")
                 time.sleep(MONITOR_INTERVAL)
-                continue
-
-            # No internet connection found by the primary check.
-            # Attempt to start AP mode.
-            print("No internet connection detected. Starting AP mode for WiFi configuration...")
+                if check_internet_connection(current_wifi_iface):
+                    print("Internet connection confirmed. Continuing to monitor.")
+                    # internet_is_up remains True
+                    continue # Back to the start of the while loop, will enter this block again
+                else:
+                    print("Internet connection lost during monitoring. Will attempt to start AP mode.")
+                    internet_is_up = False
+                    # Fall through to AP mode logic below (as internet_is_up is now False)
             
+            # If internet_is_up is False (either from startup, or lost during monitoring)
+            print("No internet connection. Preparing to start AP mode...")
             _credentials_event.clear()
             _credentials_store.clear()
             ap_started_successfully = False
@@ -589,40 +718,57 @@ def main():
                         time.sleep(3) # Brief pause before attempting connection
                         if connect_to_target_wifi(current_wifi_iface, target_ssid, target_password):
                             print("Successfully connected to the new WiFi network!")
+                            # Internet is confirmed at this point by connect_to_target_wifi
                             run_command(["sudo", "systemctl", "stop", "wificonnect.service"], check=False)
                             sys.exit(0)
                         else:
-                            print("Failed to connect to the new WiFi. Retrying AP mode.")
-                            # Fall through to post AP mode check and retry logic
+                            print("Failed to connect to the new WiFi with immediate internet verification. "
+                                  "The profile is saved. AP mode will restart after checks.")
+                            internet_is_up = False # Ensure state before POST AP MODE CHECK
+                            # Fall through to POST AP MODE CHECK
                     else:
                         if not credentials_received: print("Timed out waiting for credentials.")
                         else: print("Credentials event set, but no credentials found (or SSID missing).")
-                        # Fall through to post AP mode check and retry logic
+                        internet_is_up = False # Ensure state before POST AP MODE CHECK
+                        # Fall through to POST AP MODE CHECK
 
                     # --- POST AP MODE CHECK ---
                     # AP mode has ended (either by creds processing which failed, or timeout).
                     # Give NetworkManager a chance to reconnect to a known network.
                     print("AP mode ended. Checking for auto-reconnection to known networks for up to 30 seconds...")
-                    reconnection_wait_total = 30  # seconds
-                    reconnection_wait_interval = 5 # seconds
-                    reconnected_externally = False
+                    reconnection_wait_total = 60  # seconds
+                    reconnection_wait_interval = 10 # seconds
+                    reconnected_externally = False # Initialize for this check cycle
                     for i in range(reconnection_wait_total // reconnection_wait_interval):
-                        print(f"Auto-reconnection check ({i+1}/{reconnection_wait_total // reconnection_wait_interval})...")
+                        print(f"POST AP MODE: Auto-reconnection check ({i+1}/{reconnection_wait_total // reconnection_wait_interval})...")
+                        
+                        # Add a small initial delay before the first check in this loop,
+                        # on top of delays in stop_access_point()
+                        if i == 0:
+                            print("POST AP MODE: Giving NetworkManager a few seconds to establish connection after AP teardown...")
+                            time.sleep(5) # Initial grace for NM to connect
+
                         if check_internet_connection(current_wifi_iface):
-                            print("Successfully reconnected to a known network with internet.")
+                            print("POST AP MODE: Successfully reconnected to a known network with internet.")
                             reconnected_externally = True
                             break
+                        else: # Internet check failed
+                            print(f"POST AP MODE: Internet check failed on attempt {i+1}. Logging network state...")
+                            log_network_diagnostics(current_wifi_iface)
+
                         if i < (reconnection_wait_total // reconnection_wait_interval) - 1: # Don't sleep after last check
                              time.sleep(reconnection_wait_interval)
                     
                     if reconnected_externally:
                         # Loop will restart, primary check_internet_connection at the top will pass.
-                        print("Proceeding to monitor mode.")
+                        print("POST AP MODE: Successfully reconnected. Proceeding to monitor mode.")
+                        internet_is_up = True # Set state for next main loop iteration
                         continue # Continue to the top of the main while loop
                     else:
-                        print("Failed to auto-reconnect to a known network with internet after AP mode.")
+                        print("POST AP MODE: Failed to auto-reconnect to a known network with internet after AP mode timeout.")
                         print(f"Will retry AP mode after a delay of {RETRY_INTERVAL_AFTER_FAIL} seconds.")
-                        time.sleep(RETRY_INTERVAL_AFTER_FAIL)
+                        internet_is_up = False # Ensure state is correct
+                        time.sleep(RETRY_INTERVAL_AFTER_FAIL) 
                         continue # Continue to the top of the main while loop (which will likely re-enter AP)
 
                 else: # Failed to start manual dnsmasq
@@ -633,11 +779,13 @@ def main():
                         for line in DNSMASQ_LOG_LINES: print(line)
                     if ap_started_successfully: # Only stop AP if it was started
                         stop_access_point(current_wifi_iface)
+                    internet_is_up = False
                     time.sleep(RETRY_INTERVAL_AFTER_FAIL)
                     continue # Continue to the top of the main while loop
             else: # Failed to start AP (manual IP)
                 print("Failed to start AP (manual IP). Retrying after a delay...")
                 stop_access_point(current_wifi_iface) # Attempt cleanup just in case
+                internet_is_up = False
                 time.sleep(RETRY_INTERVAL_AFTER_FAIL)
                 continue # Continue to the top of the main while loop
 
