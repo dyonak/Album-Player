@@ -66,13 +66,13 @@ class SonosController:
             self.state = transport_info.get('current_transport_state')
 
             if self.state == 'PLAYING':
-                print(f"{sonos.player_name} is currently playing.")
+                print(f"{self.config.player} is currently playing.")
             elif self.state == 'PAUSED_PLAYBACK':
-                print(f"{sonos.player_name} is currently paused.")
+                print(f"{self.config.player} is currently paused.")
             elif self.state == 'STOPPED':
-                print(f"{sonos.player_name} is currently stopped.")
+                print(f"{self.config.player} is currently stopped.")
             elif self.state == 'TRANSITIONING':
-                print(f"{sonos.player_name} is transitioning between states.")
+                print(f"{self.config.player} is transitioning between states.")
             else:
                 print(f"Unknown state: {self.state}")
             
@@ -104,14 +104,13 @@ if __name__ == "__main__":
   sc = SonosController()
   sc.get_state()
   print(sc.state)
-  # sharelink = ShareLinkPlugin(player)
-  # sharelink.add_share_link_to_queue("https://open.spotify.com/album/14IYDXybb1XKu51QHDryak")
-  # sc.play()
-  # sleep(5)
-  # sc.pause()
+  yt_uri = "https://music.youtube.com/watch?v=q-KE9lvU810&list=OLAK5uy_kLGJbuEFbwQEYzzxq95bT4EFusZKiGvMg"
+  sc.player.play_uri(yt_uri)
+  sleep(5)
+  sc.pause()
 
-  # album = sc.now_playing()["album"]
-  # print(sc.now_playing())
+  album = sc.now_playing()["album"]
+  print(sc.now_playing())
 
   # service = MusicService(SERVICE)
   # sc.clear_queue()

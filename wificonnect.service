@@ -1,6 +1,7 @@
 [Unit]
 Description=Album Player Wifi Config
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 WorkingDirectory=/home/USERNAME/PifiConnector

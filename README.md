@@ -1,11 +1,13 @@
 # NFC album player project
 
 ## Products
+
 -PN532 NFC Reader - tried a few, I haven't formed a strong preference on model
 
 -Raspberry Pi - I've run the project on bot a Pi 4 1gb and a Pi Zero 2, recommend using the zero 2 as it's got plenty of resources to cover the need here.
 
 ## Steps to Setup
+
 Use Raspberry Pi Imager to setup Pi OS Lite 64
 
 Wire up nfc reader to pi with SPI
@@ -16,7 +18,7 @@ sudo apt update/upgrade
 raspi-config > Interfaces -> Enable SPI
 
 SPI section of the second link (SPI Communication Instructions for Raspberry Pi)
--Substitute the official libnfc from github instead of this  - http://dl.bintray.com/nfc-tools/sources/libnfc-1.7.1.tar.bz2
+-Substitute the official libnfc from github instead of this - http://dl.bintray.com/nfc-tools/sources/libnfc-1.7.1.tar.bz2
 
 Install pip
 
@@ -33,7 +35,8 @@ Install nfc module
 pip install nfcpy
 pip3 install adafruit-circuitpython-pn532
 
-At this point the following should work 
+At this point the following should work
+
 ```
 import board
 import busio
@@ -82,6 +85,7 @@ https://blog.stigok.com/2017/10/12/setting-up-a-pn532-nfc-module-on-a-raspberry-
 http://wiki.sunfounder.cc/index.php?title=PN532_NFC_Module_for_Raspberry_Pi&ref=6doe1gqh2qgn
 
 ## Docker setup
+
 Install 64 bit lite os
 
 sudo apt update
@@ -99,17 +103,21 @@ sudo sh ./get-docker.sh
 sudo usermod -aG docker [user_name]
 
 exit and reconnect to ssh (needs to be done to re-validate your user's groups)
+
 ```
 docker run -d --restart always --privileged --net=host dyonak/albumplayer:latest
 ```
 
+NOTE: docker needs to be changed to run with local storage for the DB
+#/home/album/album_db
+#docker run -d -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest
+
 - Verify this by going to hostname.local:3029 in a browser on the same network
 - You should also see NFC cards getting read in the output if you put one near the reader
 
-
-
 ## Usage
-All of this is assuming you've built some type of device that allows for an album with an NFC sticker tag, or other similar object with a NFC tag, to be placed so that it can be read by the NFC reader that you've configured. 
+
+All of this is assuming you've built some type of device that allows for an album with an NFC sticker tag, or other similar object with a NFC tag, to be placed so that it can be read by the NFC reader that you've configured.
 
 - Tag the album with the nfc tag (I like to place my tags about 1" inside the album cover, up 1" from the bottom of the album sleeve)
 - Place the album on the "player" so the tag lines up with the reader
