@@ -1,0 +1,31 @@
+services:
+  album-player:
+    image: dyonak/albumplayer:latest
+    container_name: album-player
+    restart: unless-stopped
+    privileged: true  # Required for SPI/NFC access
+    network_mode: host  # Required for Sonos discovery
+
+    volumes:
+      # Database - persists album registrations
+      - ${HOME}/album_db:/app/db
+
+      # Mount source code for development (comment out for production)
+      - ./AlbumPlayer.py:/app/AlbumPlayer.py
+      - ./NFCPoller.py:/app/NFCPoller.py
+      - ./SonosController.py:/app/SonosController.py
+      - ./Registrar.py:/app/Registrar.py
+      - ./DBConnector.py:/app/DBConnector.py
+      - ./Webapp.py:/app/Webapp.py
+      - ./wificonnect.py:/app/wificonnect.py
+      - ./config.py:/app/config.py
+      - ./audio:/app/audio
+      - ./templates:/app/templates
+
+    environment:
+      # Add any environment variables needed by your app
+      - PYTHONUNBUFFERED=1
+
+    # Uncomment for easier debugging
+    # stdin_open: true
+    # tty: true

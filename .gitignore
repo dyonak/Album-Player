@@ -8,3 +8,6 @@ __pycache__
 Dockerfile
 libnfc.conf
 test.py
+
+deploy-to-pi.sh
+DEV-WORKFLOW.md
