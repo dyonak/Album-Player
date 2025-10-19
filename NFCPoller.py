@@ -36,7 +36,7 @@ class NFCPoller:
 if __name__ == "__main__":
     nfc = NFCPoller()
     while True:
-        time.sleep(1.0)
+        time.sleep(2.0)
         nfc.poll()
 
 
