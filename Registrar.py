@@ -3,24 +3,59 @@ import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import json
 import logging
+import os
 import DBConnector
 
 logging.basicConfig(level=logging.INFO)
 
 class Registrar:
     def __init__(self, config_file="./config.json"):
-        try:
-            with open(config_file, 'r') as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            logging.error(f"Config file not found: {config_file}")
-            data = {}
-        except json.JSONDecodeError:
-            logging.error(f"Invalid JSON in config file: {config_file}")
-            data = {}
+        # Try to get credentials from encrypted environment variables first
+        client_id, client_secret = self._get_credentials_from_env()
 
-        self.spotify_auth = SpotifyClientCredentials(data["service_api_id"], data["service_api_secret"])
+        # Fall back to config.json if env vars not present
+        if not client_id or not client_secret:
+            try:
+                with open(config_file, 'r') as f:
+                    data = json.load(f)
+                client_id = data.get("service_api_id")
+                client_secret = data.get("service_api_secret")
+            except FileNotFoundError:
+                logging.error(f"Config file not found: {config_file}")
+                data = {}
+            except json.JSONDecodeError:
+                logging.error(f"Invalid JSON in config file: {config_file}")
+                data = {}
+
+        if not client_id or not client_secret:
+            raise ValueError("Spotify credentials not found in environment variables or config.json")
+
+        self.spotify_auth = SpotifyClientCredentials(client_id, client_secret)
         self.spotify = spotipy.Spotify(client_credentials_manager=self.spotify_auth)
+
+    def _get_credentials_from_env(self):
+        """
+        Decrypt Spotify credentials from environment variables.
+        Returns (client_id, client_secret) or (None, None) if not present.
+        """
+        encrypted_id = os.getenv("ENCRYPTED_SPOTIFY_ID")
+        encrypted_secret = os.getenv("ENCRYPTED_SPOTIFY_SECRET")
+        encryption_key = os.getenv("ENCRYPTION_KEY")
+
+        # If any are missing, return None (will fall back to config.json)
+        if not all([encrypted_id, encrypted_secret, encryption_key]):
+            return None, None
+
+        try:
+            from cryptography.fernet import Fernet
+            cipher = Fernet(encryption_key.encode())
+            client_id = cipher.decrypt(encrypted_id.encode()).decode()
+            client_secret = cipher.decrypt(encrypted_secret.encode()).decode()
+            logging.info("✓ Successfully loaded credentials from encrypted environment variables")
+            return client_id, client_secret
+        except Exception as e:
+            logging.error(f"Failed to decrypt credentials: {e}")
+            return None, None
 
 
     def lookup_album(self, album_title):
@@ -179,6 +214,7 @@ class Registrar:
 
 if __name__ == "__main__":
     r = Registrar()
-    albums = r.lookup_album("Nirvana")
+    albums = r.lookup_albums("Nirvana")
+    print(albums)
     for album in albums:
         print(album)

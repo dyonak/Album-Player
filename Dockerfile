@@ -26,6 +26,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 ADD . /app
 VOLUME /db
 
+# Encrypted Spotify API Credentials
+# IMPORTANT: Replace these with your encrypted credentials
+# Run: python3 encrypt_credentials.py to generate these values
+ENV ENCRYPTION_KEY=".encryption_key"
+ENV ENCRYPTED_SPOTIFY_ID="gAAAAABo9wK8K8ZmXQTFn3G8m3TG-qzkYMpn4tbUbWQI8gP5OKfspHjxNOVQFCfZylSGGBGHRJkeSUYEmeMKmwtngWYSRciYR7_qdFo_z5XqzlcIEMQIjda_TbVoAe-w9ml9IXWUxJOG"
+ENV ENCRYPTED_SPOTIFY_SECRET="gAAAAABo9wK8SOnP6rTCyEa0Q7LIwke3iffQZarfSFxkg4krci5ohB5UvwGUEgrrZBYGdt_kBS3PJYST-MjndSgZfErtjcDyYHJkTbKRUewENl62MSlreRchxI7NSe6oceH4-M8kZIgV"
+
 #Add executable perms for the run.sh script
 RUN chmod +x run.sh
 

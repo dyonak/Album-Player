@@ -1,13 +1,22 @@
 /__pycache__
 /myvenv
+/my_venv
 config.json
 *.bz2
 .cache
 myvenv
-__pycache__
 Dockerfile
 libnfc.conf
 test.py
+.claude
 
+# Encryption key - NEVER commit this!
+.encryption_key
+CREDENTIALS-SETUP.md
+encrypt_credentials.py
+QUICKSTART-CREDENTIALS.md
+
+#Dev notes/tools
+build-and-push.sh
 deploy-to-pi.sh
 DEV-WORKFLOW.md

@@ -39,7 +39,6 @@ sudo usermod -aG docker $USER
 echo "✅ Album player setup complete"
 echo "🛑 In order for the user group changes to take effect you need to exit and reconnect to a new session."
 echo "ℹ️ After reconnecting you can run the following command to start the album player:"
-echo "⚙️ docker run -d --restart always --privileged --net=host dyonak/albumplayer:latest"
+echo "⚙️ docker run -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest"
+#docker run -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest
 ##### WILL NEED TO exit SSH session and reconnect for this to take effect
-#After reconnecting run
-#docker run -d --restart always --privileged --net=host dyonak/albumplayer:latest

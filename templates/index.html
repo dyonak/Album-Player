@@ -10,6 +10,36 @@
       width: 75px !important;
     }
   }
+
+  /* Sortable column headers */
+  th.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding-right: 25px !important;
+  }
+
+  th.sortable:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+
+  th.sortable::after {
+    content: '⇅';
+    position: absolute;
+    right: 8px;
+    opacity: 0.3;
+    font-size: 0.9em;
+  }
+
+  th.sortable.asc::after {
+    content: '↑';
+    opacity: 1;
+  }
+
+  th.sortable.desc::after {
+    content: '↓';
+    opacity: 1;
+  }
 </style>
 {% endblock %} {% block content %}
 <h1>Your Music</h1>
@@ -17,11 +47,11 @@
   <table class="table table-hover" id="albumTable">
     <thead>
       <tr>
-        <th>Album Details</th>
-        <th class="hide-on-mobile" data-column="play_count">
+        <th class="sortable" data-column="album_details" data-type="text">Album Details</th>
+        <th class="hide-on-mobile sortable" data-column="play_count" data-type="number">
           Play Count
         </th>
-        <th class="hide-on-mobile" data-column="last_played_date">
+        <th class="hide-on-mobile sortable" data-column="last_played_date" data-type="date">
           Last Played
         </th>
         <th></th>
@@ -30,7 +60,7 @@
     <tbody>
       {% for album in albums %}
       <tr>
-        <td>
+        <td data-artist="{{ album.artist }}" data-album="{{ album.album }}">
           <div class="card mb-0" style="max-width: 520px">
             <div class="row g-0">
               <div class="col-md-5">
@@ -56,8 +86,8 @@
             </div>
           </div>
         </td>
-        <td class="hide-on-mobile">{{ album.play_count }}</td>
-        <td class="hide-on-mobile">{{ album.last_played_date }}</td>
+        <td class="hide-on-mobile" data-sort-value="{{ album.play_count }}">{{ album.play_count }}</td>
+        <td class="hide-on-mobile" data-sort-value="{{ album.last_played_date }}">{{ album.last_played_date }}</td>
         <td>
           <button
             class="btn btn-danger delete-album-btn"
@@ -192,6 +222,81 @@
               albumToDeleteUri = null; // Reset the URI when canceling
           });
       }
+
+      // Table sorting functionality
+      const sortableHeaders = document.querySelectorAll("th.sortable");
+
+      sortableHeaders.forEach((header) => {
+          header.addEventListener("click", () => {
+              const columnIndex = Array.from(header.parentElement.children).indexOf(header);
+              const dataType = header.getAttribute("data-type");
+              const currentSort = header.classList.contains("asc") ? "asc" :
+                                 header.classList.contains("desc") ? "desc" : "none";
+
+              // Remove sort classes from all headers
+              sortableHeaders.forEach(h => h.classList.remove("asc", "desc"));
+
+              // Determine new sort direction
+              let newSort = "asc";
+              if (currentSort === "asc") {
+                  newSort = "desc";
+              } else if (currentSort === "desc") {
+                  newSort = "asc";
+              }
+
+              // Add sort class to clicked header
+              header.classList.add(newSort);
+
+              // Sort the table rows
+              const rows = Array.from(tbody.querySelectorAll("tr"));
+
+              rows.sort((a, b) => {
+                  const cellA = a.children[columnIndex];
+                  const cellB = b.children[columnIndex];
+
+                  let valueA = cellA.getAttribute("data-sort-value") || cellA.textContent.trim();
+                  let valueB = cellB.getAttribute("data-sort-value") || cellB.textContent.trim();
+
+                  // Handle different data types
+                  if (dataType === "number") {
+                      valueA = parseInt(valueA) || 0;
+                      valueB = parseInt(valueB) || 0;
+                  } else if (dataType === "date") {
+                      // Handle empty dates (treat as oldest)
+                      valueA = valueA && valueA !== "None" && valueA !== "" ? new Date(valueA) : new Date(0);
+                      valueB = valueB && valueB !== "None" && valueB !== "" ? new Date(valueB) : new Date(0);
+                  } else if (dataType === "text") {
+                      // Sort by artist first, then by album name
+                      const artistA = cellA.getAttribute("data-artist") || "";
+                      const artistB = cellB.getAttribute("data-artist") || "";
+                      const albumA = cellA.getAttribute("data-album") || "";
+                      const albumB = cellB.getAttribute("data-album") || "";
+
+                      // Compare artists first
+                      const artistCompare = artistA.localeCompare(artistB, undefined, { sensitivity: 'base' });
+                      if (artistCompare !== 0) {
+                          return newSort === "asc" ? artistCompare : -artistCompare;
+                      }
+
+                      // If artists are the same, compare album names
+                      const albumCompare = albumA.localeCompare(albumB, undefined, { sensitivity: 'base' });
+                      return newSort === "asc" ? albumCompare : -albumCompare;
+                  }
+
+                  // Compare values (for other types)
+                  if (valueA < valueB) {
+                      return newSort === "asc" ? -1 : 1;
+                  } else if (valueA > valueB) {
+                      return newSort === "asc" ? 1 : -1;
+                  } else {
+                      return 0;
+                  }
+              });
+
+              // Re-append sorted rows
+              rows.forEach(row => tbody.appendChild(row));
+          });
+      });
   });
 </script>
 {% endblock %}

@@ -23,8 +23,12 @@ services:
       - ./templates:/app/templates
 
     environment:
-      # Add any environment variables needed by your app
+      # Python settings
       - PYTHONUNBUFFERED=1
+
+      # Spotify API Credentials (encrypted in Docker image)
+      # These are already baked into the image from Dockerfile
+      # Override here only if you need different credentials for testing
 
     # Uncomment for easier debugging
     # stdin_open: true
