@@ -5,6 +5,8 @@
 # Example: ./build-and-push.sh v1.2.3
 # If no tag is provided, defaults to 'latest'
 
+cd ../
+
 set -e  # Exit on error
 
 # Configuration

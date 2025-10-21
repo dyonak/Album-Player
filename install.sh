@@ -1,3 +1,7 @@
+####################################
+# Album Player Standalone Install  #
+####################################
+
 #Update the system
 echo "1️⃣ Setting up album player - Updating the system (1/6)"
 sudo apt-get update && sudo apt-get -y upgrade
@@ -23,7 +27,7 @@ pip install flask requests
 #Create and enable the service
 echo "5️⃣ Setting up album player - Creating and enabling PifiConnector service (5/6)"
 sed -i -e "s/USERNAME/$USER/g" wificonnect.service
-sudo cp wificonnect.service /etc/systemd/system
+sudo cp /services/wificonnect.service /etc/systemd/system
 sudo systemctl enable wificonnect.service
 sudo systemctl daemon-reload
 sudo systemctl start wificonnect.service
