@@ -15,10 +15,10 @@ RUN tar -xf libnfc-1.8.0.tar.bz2
 RUN ./libnfc-1.8.0/configure --prefix=/usr --sysconfdir=/etc
 RUN make
 RUN make install
-COPY libnfc.conf /etc/nfc/
+COPY ../libnfc.conf /etc/nfc/
 
 # Copy the current directory contents into the container at /app
-COPY requirements.txt /app
+COPY ../requirements.txt /app
 
 # Install any dependencies specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
@@ -28,7 +28,7 @@ VOLUME /db
 
 # Encrypted Spotify API Credentials
 # IMPORTANT: Replace these with your encrypted credentials
-# Run: python3 dev_tools/encrypt_credentials.py to generate these values
+# Run: python3 encrypt_credentials.py to generate these values
 ENV ENCRYPTION_KEY=".encryption_key"
 ENV ENCRYPTED_SPOTIFY_ID="gAAAAABo9wK8K8ZmXQTFn3G8m3TG-qzkYMpn4tbUbWQI8gP5OKfspHjxNOVQFCfZylSGGBGHRJkeSUYEmeMKmwtngWYSRciYR7_qdFo_z5XqzlcIEMQIjda_TbVoAe-w9ml9IXWUxJOG"
 ENV ENCRYPTED_SPOTIFY_SECRET="gAAAAABo9wK8SOnP6rTCyEa0Q7LIwke3iffQZarfSFxkg4krci5ohB5UvwGUEgrrZBYGdt_kBS3PJYST-MjndSgZfErtjcDyYHJkTbKRUewENl62MSlreRchxI7NSe6oceH4-M8kZIgV"
@@ -37,7 +37,7 @@ ENV ENCRYPTED_SPOTIFY_SECRET="gAAAAABo9wK8SOnP6rTCyEa0Q7LIwke3iffQZarfSFxkg4krci
 RUN chmod +x run.sh
 
 # Run app.py when the container launches
-CMD ["./run.sh"]
+CMD ["../run.sh"]
 #Run command
 #/home/album/album_db 
 #docker run -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest
