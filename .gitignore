@@ -12,3 +12,4 @@ test.py
 
 # Encryption key - NEVER commit this!
 .encryption_key
+wifi_fallback.json

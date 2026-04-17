@@ -6,6 +6,7 @@ import threading
 import os
 import re
 import sys
+import json
 import requests # Add this at the top
 from flask import Flask, request, render_template_string, redirect, url_for, make_response
 
@@ -20,6 +21,50 @@ AP_CONNECTION_NAME = "captive-portal-ap" # nmcli connection name for the AP
 FLASK_PORT = 5000          # Port for the captive portal web server
 MONITOR_INTERVAL = 30      # Seconds to wait between internet checks when connected
 RETRY_INTERVAL_AFTER_FAIL = 10 # Seconds to wait before retrying AP mode or connection
+
+# --- Fallback WiFi Configuration ---
+# Fallback network is tried after captive portal times out (10 minutes)
+# This provides a safety net for testing and recovery
+# Configure via wifi_fallback.json or environment variables
+FALLBACK_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wifi_fallback.json")
+FALLBACK_SSID = None  # Loaded from config file
+FALLBACK_PASSWORD = None  # Loaded from config file
+FALLBACK_RETRY_ATTEMPTS = 3
+FALLBACK_ENABLED = True
+
+def load_fallback_config():
+    """Load fallback WiFi configuration from file or environment variables."""
+    global FALLBACK_SSID, FALLBACK_PASSWORD, FALLBACK_RETRY_ATTEMPTS, FALLBACK_ENABLED
+
+    # First, check environment variables (highest priority)
+    env_ssid = os.environ.get('FALLBACK_WIFI_SSID')
+    env_password = os.environ.get('FALLBACK_WIFI_PASSWORD')
+
+    if env_ssid:
+        print(f"Fallback WiFi configured via environment variable: SSID='{env_ssid}'")
+        FALLBACK_SSID = env_ssid
+        FALLBACK_PASSWORD = env_password or ""
+        return True
+
+    # Then try config file
+    config_path = os.environ.get('FALLBACK_CONFIG_PATH', FALLBACK_CONFIG_FILE)
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            FALLBACK_SSID = config.get('fallback_ssid', FALLBACK_SSID)
+            FALLBACK_PASSWORD = config.get('fallback_password', FALLBACK_PASSWORD)
+            FALLBACK_RETRY_ATTEMPTS = config.get('fallback_retry_attempts', FALLBACK_RETRY_ATTEMPTS)
+            FALLBACK_ENABLED = config.get('fallback_enabled', FALLBACK_ENABLED)
+            print(f"Loaded fallback config from {config_path}: SSID='{FALLBACK_SSID}', enabled={FALLBACK_ENABLED}")
+            return True
+    except FileNotFoundError:
+        print(f"Fallback config file not found: {config_path}. Fallback disabled.")
+        FALLBACK_ENABLED = False
+        return False
+    except json.JSONDecodeError as e:
+        print(f"Error parsing fallback config file: {e}. Fallback disabled.")
+        FALLBACK_ENABLED = False
+        return False
 
 # --- Flask App ---
 flask_app = Flask(__name__)
@@ -592,6 +637,66 @@ def connect_to_target_wifi(iface, ssid, password):
         print(f"An unexpected error occurred while trying to connect to {ssid}: {e}")
         return False
 
+def attempt_fallback_connection(iface):
+    """
+    Attempt to connect to the fallback WiFi network.
+    Called after captive portal times out without receiving credentials.
+    Returns True if successfully connected with internet, False otherwise.
+    """
+    global FALLBACK_SSID, FALLBACK_PASSWORD, FALLBACK_RETRY_ATTEMPTS, FALLBACK_ENABLED
+
+    # Load/reload fallback configuration
+    load_fallback_config()
+
+    if not FALLBACK_ENABLED:
+        print("Fallback WiFi connection is disabled in configuration.")
+        return False
+
+    if not FALLBACK_SSID:
+        print("No fallback SSID configured.")
+        return False
+
+    print(f"\n{'='*50}")
+    print(f"ATTEMPTING FALLBACK WiFi CONNECTION")
+    print(f"SSID: '{FALLBACK_SSID}'")
+    print(f"Retry attempts: {FALLBACK_RETRY_ATTEMPTS}")
+    print(f"{'='*50}\n")
+
+    for attempt in range(1, FALLBACK_RETRY_ATTEMPTS + 1):
+        print(f"--- Fallback attempt {attempt}/{FALLBACK_RETRY_ATTEMPTS} ---")
+
+        # Scan for the fallback network to see if it's in range
+        print(f"Scanning for fallback network '{FALLBACK_SSID}'...")
+        run_command(["nmcli", "device", "wifi", "rescan"], check=False, timeout=10)
+        time.sleep(3)  # Allow scan to complete
+
+        scan_output = run_command(
+            ["nmcli", "-t", "-f", "SSID", "device", "wifi", "list"],
+            check=False, timeout=10
+        )
+
+        if scan_output and FALLBACK_SSID in scan_output:
+            print(f"Fallback network '{FALLBACK_SSID}' found in range. Attempting connection...")
+
+            if connect_to_target_wifi(iface, FALLBACK_SSID, FALLBACK_PASSWORD):
+                print(f"\n{'='*50}")
+                print(f"SUCCESS: Connected to fallback network '{FALLBACK_SSID}'!")
+                print(f"Device should now be SSH accessible.")
+                print(f"{'='*50}\n")
+                return True
+            else:
+                print(f"Failed to connect to fallback network or no internet on attempt {attempt}.")
+        else:
+            print(f"Fallback network '{FALLBACK_SSID}' not found in range on attempt {attempt}.")
+
+        if attempt < FALLBACK_RETRY_ATTEMPTS:
+            print(f"Waiting 5 seconds before next attempt...")
+            time.sleep(5)
+
+    print(f"\nAll {FALLBACK_RETRY_ATTEMPTS} fallback attempts failed.")
+    print("Will restart captive portal.\n")
+    return False
+
 # --- Main Application Logic ---
 def main():
     if os.geteuid() != 0:
@@ -729,6 +834,17 @@ def main():
                     else:
                         if not credentials_received: print("Timed out waiting for credentials.")
                         else: print("Credentials event set, but no credentials found (or SSID missing).")
+
+                        # --- FALLBACK WiFi ATTEMPT ---
+                        print("\nNo credentials received from captive portal. Attempting fallback WiFi connection...")
+                        if attempt_fallback_connection(current_wifi_iface):
+                            print("Fallback WiFi connection successful! Stopping wificonnect service.")
+                            run_command(["sudo", "systemctl", "stop", "wificonnect.service"], check=False)
+                            sys.exit(0)
+                        else:
+                            print("Fallback connection failed. Will restart captive portal.")
+                        # --- END FALLBACK WiFi ATTEMPT ---
+
                         internet_is_up = False # Ensure state before POST AP MODE CHECK
                         # Fall through to POST AP MODE CHECK
 

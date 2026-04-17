@@ -13,7 +13,7 @@
 #   -DBConnector.py - Handles database connections and queries
 #   -config.py - Configuration file for API keys and settings
 
-from time import sleep
+from time import sleep, time
 import requests
 from NFCPoller import NFCPoller
 from Registrar import Registrar
@@ -32,23 +32,45 @@ if __name__ == "__main__":
     sc = SonosController()
     reg = Registrar()
 
+    # Grace period tracking for tag removal
+    tag_absent_start_time = None
+    GRACE_PERIOD_SECONDS = 5.0
+    last_playing_tag = None  # Track the last tag that was actually playing
+
     while True:
         nfc.poll()
         print(f'Poll complete\nCurrent:{nfc.tag}\nPrevious:{nfc.last_tag}')
-        sleep(0.7) #Wait long enough for the device timeout
+        sleep(0.8) #Wait long enough for the device timeout
 
-        #No tag present but previous poll had a tag, album was removed - stop the playing
-        if nfc.tag == None and nfc.last_tag:
-            print("Stopping!")
-            sc.pause()
+        #No tag present but there was a tag playing before
+        if nfc.tag == None and last_playing_tag:
+            # Start the grace period timer if not already started
+            if tag_absent_start_time is None:
+                tag_absent_start_time = time()
+                print(f"Tag removed, starting {GRACE_PERIOD_SECONDS}s grace period...")
+            else:
+                # Check if grace period has elapsed
+                elapsed_time = time() - tag_absent_start_time
+                if elapsed_time >= GRACE_PERIOD_SECONDS:
+                    print(f"Grace period elapsed ({elapsed_time:.1f}s), stopping!")
+                    sc.pause()
+                    last_playing_tag = None  # Clear the playing tag
+                    tag_absent_start_time = None  # Reset for next time
+                else:
+                    print(f"Grace period: {elapsed_time:.1f}s / {GRACE_PERIOD_SECONDS}s")
             continue
+
+        # Tag is present again, reset the grace period timer
+        if nfc.tag is not None and tag_absent_start_time is not None:
+            print("Tag detected again, canceling grace period")
+            tag_absent_start_time = None
 
         #No tag found, make sure nothing is playing and move on
         if nfc.tag == None:
             continue
 
-        #This is the same tag that's been on the player, no change needed
-        if nfc.tag == nfc.last_tag:
+        #This is the same tag that's been playing, no change needed
+        if nfc.tag == last_playing_tag:
             continue
     
 
@@ -56,6 +78,7 @@ if __name__ == "__main__":
 
         if result != None:
             sc.play_album(result[4])
+            last_playing_tag = nfc.tag  # Remember this tag is now playing
         else:
             sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/detected.mp3")
             album = None
@@ -79,6 +102,7 @@ if __name__ == "__main__":
                     result = reg.lookup_tag(nfc.tag)
                     if result != None:
                         sc.play_album(result[4])
+                        last_playing_tag = nfc.tag  # Remember this tag is now playing
 
                 if len(playing) > 30: #We've been waiting over 1.5 minutes, let the user know the registration process has timed out
                     sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/timeout.mp3")

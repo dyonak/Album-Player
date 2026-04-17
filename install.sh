@@ -16,7 +16,7 @@ sudo dtparam spi=on
 
 #Install PifiConnector to manage wifi connection
 #Setup directory, grab from github, create venv
-echo "4️⃣ Setting up album player - Installing PifiConnector (4/6)"
+echo "4️⃣ Setting up album player - Installing PifiConnector (4/7)"
 cd ~
 git clone https://github.com/dyonak/PifiConnector
 cd ~/PifiConnector
@@ -24,8 +24,21 @@ python3 -m venv wifivenv
 source wifivenv/bin/activate
 pip install flask requests
 
+#Create fallback WiFi configuration
+echo "5️⃣ Setting up album player - Creating fallback WiFi config (5/7)"
+cat > ~/PifiConnector/wifi_fallback.json << 'EOF'
+{
+  "fallback_ssid": "dyonak",
+  "fallback_password": "7632214967",
+  "fallback_retry_attempts": 3,
+  "fallback_enabled": true
+}
+EOF
+chmod 600 ~/PifiConnector/wifi_fallback.json
+echo "Fallback WiFi config created. Edit ~/PifiConnector/wifi_fallback.json to customize."
+
 #Create and enable the service
-echo "5️⃣ Setting up album player - Creating and enabling PifiConnector service (5/6)"
+echo "6️⃣ Setting up album player - Creating and enabling PifiConnector service (6/7)"
 sed -i -e "s/USERNAME/$USER/g" wificonnect.service
 sudo cp /services/wificonnect.service /etc/systemd/system
 sudo systemctl enable wificonnect.service
@@ -33,7 +46,7 @@ sudo systemctl daemon-reload
 sudo systemctl start wificonnect.service
 
 #install docker
-echo "6️⃣ Setting up album player - Installing docker (6/6)"
+echo "7️⃣ Setting up album player - Installing docker (7/7)"
 mkdir ~/docker && cd ~/docker
 curl -fsSL https://get.docker.com -o get-docker.sh
 chmod +x get-docker.sh

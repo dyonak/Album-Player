@@ -35,8 +35,11 @@ class SonosController:
           return
 
     def stop(self):
-        self.player.stop()
-        self.get_state()
+        try:
+            self.player.stop()
+            self.get_state()
+        except:
+            return
 
     def next(self):
         self.player.next()
