@@ -1,15 +1,17 @@
 [Unit]
-Description=Album Player Wifi Config
+Description=Album Player WiFi Provisioning
 Wants=network-online.target
 After=network-online.target
 
 [Service]
-WorkingDirectory=/home/USERNAME/PifiConnector
-# Optional environment file for fallback WiFi configuration overrides
-# The '-' prefix means systemd won't fail if the file doesn't exist
-EnvironmentFile=-/home/USERNAME/PifiConnector/wifi_fallback.env
-ExecStart=/home/USERNAME/PifiConnector/wifivenv/bin/python3 wificonnect.py
+Type=simple
+WorkingDirectory=/home/dyonak/album-player
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /home/dyonak/album-player/wificonnect.py
+StandardOutput=journal
+StandardError=journal
 Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

@@ -1,61 +1,61 @@
-####################################
-# Album Player Standalone Install  #
-####################################
+#!/bin/bash
+# Album Player Installation Script
+# Run this on a fresh Raspberry Pi to set up the Album Player
 
-#Update the system
-echo "1️⃣ Setting up album player - Updating the system (1/6)"
-sudo apt-get update && sudo apt-get -y upgrade
+set -e
 
-#Install pip and setup python venv
-echo "2️⃣ Setting up album player - Installing pip and git (2/6)"
-sudo apt-get install -y python3-pip git
+echo "============================================"
+echo "Album Player Installation"
+echo "============================================"
 
-#enable SPI
-echo "3️⃣ Setting up album player - Enabling spi (3/6)"
+# Update system
+echo "1/6 - Updating system packages..."
+sudo apt-get update
+sudo apt-get upgrade -y
+
+# Install base dependencies
+echo "2/6 - Installing base dependencies..."
+sudo apt-get install -y python3-pip python3-venv git
+
+# Enable SPI for NFC reader
+echo "3/6 - Enabling SPI..."
 sudo dtparam spi=on
 
-#Install PifiConnector to manage wifi connection
-#Setup directory, grab from github, create venv
-echo "4️⃣ Setting up album player - Installing PifiConnector (4/7)"
-cd ~
-git clone https://github.com/dyonak/PifiConnector
-cd ~/PifiConnector
-python3 -m venv wifivenv
-source wifivenv/bin/activate
-pip install flask requests
+# Install WiFi provisioning dependencies
+echo "4/6 - Installing WiFi provisioning dependencies..."
+sudo apt-get install -y \
+    network-manager \
+    dnsmasq \
+    iproute2 \
+    iw \
+    iptables \
+    curl
 
-#Create fallback WiFi configuration
-echo "5️⃣ Setting up album player - Creating fallback WiFi config (5/7)"
-cat > ~/PifiConnector/wifi_fallback.json << 'EOF'
-{
-  "fallback_ssid": "dyonak",
-  "fallback_password": "7632214967",
-  "fallback_retry_attempts": 3,
-  "fallback_enabled": true
-}
-EOF
-chmod 600 ~/PifiConnector/wifi_fallback.json
-echo "Fallback WiFi config created. Edit ~/PifiConnector/wifi_fallback.json to customize."
+# Install Python dependencies for wificonnect.py (system-wide)
+sudo pip3 install flask --break-system-packages
 
-#Create and enable the service
-echo "6️⃣ Setting up album player - Creating and enabling PifiConnector service (6/7)"
-sed -i -e "s/USERNAME/$USER/g" wificonnect.service
-sudo cp /services/wificonnect.service /etc/systemd/system
-sudo systemctl enable wificonnect.service
+# Set up wificonnect service
+echo "5/6 - Setting up WiFi provisioning service..."
+mkdir -p ~/album-player
+sudo cp services/wificonnect.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl start wificonnect.service
+sudo systemctl enable wificonnect.service
+echo "WiFi provisioning service installed (will start after code is deployed)"
 
-#install docker
-echo "7️⃣ Setting up album player - Installing docker (7/7)"
-mkdir ~/docker && cd ~/docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-chmod +x get-docker.sh
-./get-docker.sh
+# Install Docker
+echo "6/6 - Installing Docker..."
+curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+chmod +x /tmp/get-docker.sh
+/tmp/get-docker.sh
 sudo usermod -aG docker $USER
 
-echo "✅ Album player setup complete"
-echo "🛑 In order for the user group changes to take effect you need to exit and reconnect to a new session."
-echo "ℹ️ After reconnecting you can run the following command to start the album player:"
-echo "⚙️ docker run -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest"
-#docker run -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest
-##### WILL NEED TO exit SSH session and reconnect for this to take effect
+echo ""
+echo "============================================"
+echo "Installation Complete!"
+echo "============================================"
+echo ""
+echo "Next steps:"
+echo "1. Log out and back in (for Docker group permissions)"
+echo "2. From your dev machine, run: ./dev_tools/deploy-to-pi.sh"
+echo "3. The WiFi provisioning and Album Player will start automatically"
+echo ""

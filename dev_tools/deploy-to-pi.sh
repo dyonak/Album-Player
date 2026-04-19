@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # deploy-to-pi.sh - Quick deployment script for Album Player development
-# This syncs code changes to the Pi and restarts the container
+# This syncs code changes to the Pi and restarts services
 
 cd ../
 set -e  # Exit on error
@@ -23,7 +23,7 @@ echo "Target: ${PI_USER}@${PI_HOST}:${PI_CODE_DIR}"
 echo ""
 
 # Check if we can reach the Pi
-echo -e "${YELLOW}[1/4] Checking connection to Pi...${NC}"
+echo -e "${YELLOW}[1/5] Checking connection to Pi...${NC}"
 if ! ssh -o ConnectTimeout=5 -o BatchMode=yes ${PI_USER}@${PI_HOST} exit 2>/dev/null; then
     echo -e "${RED}Error: Cannot connect to ${PI_USER}@${PI_HOST}${NC}"
     echo "Please check:"
@@ -32,15 +32,15 @@ if ! ssh -o ConnectTimeout=5 -o BatchMode=yes ${PI_USER}@${PI_HOST} exit 2>/dev/
     echo "  - Hostname is correct (you can override with: PI_HOST=192.168.1.x ./deploy-to-pi.sh)"
     exit 1
 fi
-echo -e "${GREEN}✓ Connected${NC}"
+echo -e "${GREEN}Connected${NC}"
 
 # Ensure the target directory exists
-echo -e "${YELLOW}[2/4] Ensuring target directory exists...${NC}"
+echo -e "${YELLOW}[2/5] Ensuring target directory exists...${NC}"
 ssh ${PI_USER}@${PI_HOST} "mkdir -p ${PI_CODE_DIR}"
-echo -e "${GREEN}✓ Directory ready${NC}"
+echo -e "${GREEN}Directory ready${NC}"
 
 # Sync code files
-echo -e "${YELLOW}[3/4] Syncing code files...${NC}"
+echo -e "${YELLOW}[3/5] Syncing code files...${NC}"
 rsync -avz --progress \
     --exclude='.git' \
     --exclude='__pycache__' \
@@ -54,19 +54,24 @@ rsync -avz --progress \
     --exclude='.vscode' \
     ./ \
     ${PI_USER}@${PI_HOST}:${PI_CODE_DIR}/
-echo -e "${GREEN}✓ Files synced${NC}"
+echo -e "${GREEN}Files synced${NC}"
 
-# Restart the container with docker compose to ensure volume mounts are active
-echo -e "${YELLOW}[4/4] Restarting container...${NC}"
+# Restart wificonnect service
+echo -e "${YELLOW}[4/5] Restarting WiFi provisioning service...${NC}"
+ssh ${PI_USER}@${PI_HOST} "sudo systemctl restart wificonnect.service 2>/dev/null || echo 'Service not installed yet'"
+echo -e "${GREEN}WiFi service restarted${NC}"
+
+# Restart the container
+echo -e "${YELLOW}[5/5] Restarting Docker container...${NC}"
 ssh ${PI_USER}@${PI_HOST} "cd ${PI_CODE_DIR} && docker compose down && docker compose up -d"
-echo -e "${GREEN}✓ Container restarted${NC}"
+echo -e "${GREEN}Container restarted${NC}"
 
 echo ""
 echo -e "${GREEN}=== Deployment Complete! ===${NC}"
 echo ""
-echo "Next steps:"
-echo "  - View logs: ssh ${PI_USER}@${PI_HOST} 'docker logs -f ${CONTAINER_NAME}'"
-echo "  - SSH to Pi: ssh ${PI_USER}@${PI_HOST}"
+echo "Services:"
+echo "  - WiFi provisioning: sudo systemctl status wificonnect"
+echo "  - Album Player: docker logs -f album-player-album-player-1"
 echo ""
 echo "To customize settings, set environment variables:"
 echo "  PI_HOST=192.168.1.100 PI_USER=myuser ./deploy-to-pi.sh"

@@ -1,917 +1,779 @@
 #!/usr/bin/env python3
+"""
+WiFi Provisioning with Captive Portal for Album Player
+
+Simple flow:
+1. On boot, check if we have internet connectivity
+2. If yes, exit (nothing to do)
+3. If no, start AP mode with captive portal
+4. While in AP mode, check every 5 minutes for known networks
+5. When user configures WiFi via portal, connect and exit
+6. Captive portal auto-opens on mobile devices (iOS/Android)
+"""
 
 import subprocess
 import time
 import threading
 import os
-import re
 import sys
-import json
-import requests # Add this at the top
-from flask import Flask, request, render_template_string, redirect, url_for, make_response
+import signal
+from flask import Flask, request, render_template_string, redirect, make_response
 
 # --- Configuration ---
-# Try to autodetect, or set this manually if detection fails or is wrong.
-# Example: WIFI_IFACE = "wlan0"
-WIFI_IFACE = None # Will be auto-detected
-AP_SSID = "AlbumPlayerWifiConfig"  # SSID for the captive portal AP
-AP_PSK = "playjams"     # Password for the captive portal AP (at least 8 chars)
-AP_IP_ADDRESS = "192.168.42.1" # IP address of this device when in AP mode
-AP_CONNECTION_NAME = "captive-portal-ap" # nmcli connection name for the AP
-FLASK_PORT = 5000          # Port for the captive portal web server
-MONITOR_INTERVAL = 30      # Seconds to wait between internet checks when connected
-RETRY_INTERVAL_AFTER_FAIL = 10 # Seconds to wait before retrying AP mode or connection
+AP_SSID = "AlbumPlayerWifiConfig"
+AP_PASSWORD = "playjams"  # At least 8 characters
+AP_IP = "192.168.42.1"
+AP_SUBNET = "255.255.255.0"
+AP_DHCP_RANGE_START = "192.168.42.10"
+AP_DHCP_RANGE_END = "192.168.42.50"
+FLASK_PORT = 80  # Port 80 required for captive portal detection
+KNOWN_NETWORK_CHECK_INTERVAL = 300  # 5 minutes
+INTERNET_CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"
 
-# --- Fallback WiFi Configuration ---
-# Fallback network is tried after captive portal times out (10 minutes)
-# This provides a safety net for testing and recovery
-# Configure via wifi_fallback.json or environment variables
-FALLBACK_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wifi_fallback.json")
-FALLBACK_SSID = None  # Loaded from config file
-FALLBACK_PASSWORD = None  # Loaded from config file
-FALLBACK_RETRY_ATTEMPTS = 3
-FALLBACK_ENABLED = True
-
-def load_fallback_config():
-    """Load fallback WiFi configuration from file or environment variables."""
-    global FALLBACK_SSID, FALLBACK_PASSWORD, FALLBACK_RETRY_ATTEMPTS, FALLBACK_ENABLED
-
-    # First, check environment variables (highest priority)
-    env_ssid = os.environ.get('FALLBACK_WIFI_SSID')
-    env_password = os.environ.get('FALLBACK_WIFI_PASSWORD')
-
-    if env_ssid:
-        print(f"Fallback WiFi configured via environment variable: SSID='{env_ssid}'")
-        FALLBACK_SSID = env_ssid
-        FALLBACK_PASSWORD = env_password or ""
-        return True
-
-    # Then try config file
-    config_path = os.environ.get('FALLBACK_CONFIG_PATH', FALLBACK_CONFIG_FILE)
-    try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-            FALLBACK_SSID = config.get('fallback_ssid', FALLBACK_SSID)
-            FALLBACK_PASSWORD = config.get('fallback_password', FALLBACK_PASSWORD)
-            FALLBACK_RETRY_ATTEMPTS = config.get('fallback_retry_attempts', FALLBACK_RETRY_ATTEMPTS)
-            FALLBACK_ENABLED = config.get('fallback_enabled', FALLBACK_ENABLED)
-            print(f"Loaded fallback config from {config_path}: SSID='{FALLBACK_SSID}', enabled={FALLBACK_ENABLED}")
-            return True
-    except FileNotFoundError:
-        print(f"Fallback config file not found: {config_path}. Fallback disabled.")
-        FALLBACK_ENABLED = False
-        return False
-    except json.JSONDecodeError as e:
-        print(f"Error parsing fallback config file: {e}. Fallback disabled.")
-        FALLBACK_ENABLED = False
-        return False
+# --- Global State ---
+wifi_iface = None
+ap_active = False
+credentials_received = threading.Event()
+received_ssid = None
+received_password = None
+shutdown_flag = threading.Event()
 
 # --- Flask App ---
-flask_app = Flask(__name__)
-# Shared data between main thread and Flask thread
-credentials_received_event = None
-received_credentials_store = {}
-flask_ap_ssid = AP_SSID # Used in connecting template
+app = Flask(__name__)
 
-HTML_FORM_TEMPLATE = """
+# Clean, mobile-friendly HTML template
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Configure WiFi</title>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Album Player WiFi Setup</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; text-align: center; }
-        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); display: inline-block; max-width: 400px; width: 90%; }
-        h1 { color: #333; }
-        label { display: block; margin-top: 10px; text-align: left; color: #555; font-weight: bold; }
-        input[type="text"], input[type="password"] { width: calc(100% - 22px); padding: 10px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
-        input[type="submit"] { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 20px; width: 100%; }
-        input[type="submit"]:hover { background-color: #0056b3; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        select, input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+        select:focus, input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .password-container {
+            position: relative;
+        }
+        .toggle-password {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button[type="submit"] {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button[type="submit"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        }
+        button[type="submit"]:active {
+            transform: translateY(0);
+        }
+        .manual-entry {
+            text-align: center;
+            margin-top: 16px;
+        }
+        .manual-entry a {
+            color: #667eea;
+            font-size: 14px;
+        }
+        .error {
+            background: #fee;
+            color: #c00;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .success {
+            background: #efe;
+            color: #060;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            text-align: center;
+        }
+        .networks-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .hidden { display: none; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Set Up WiFi Connection</h1>
-        <p>Connect this device to a WiFi network.</p>
-        <form action="/configure" method="post">
-            <label for="ssid">WiFi Name (SSID):</label>
-            <input type="text" id="ssid" name="ssid" required><br>
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password"><br>
-            <input type="submit" value="Connect">
+        <h1>🎵 Album Player</h1>
+        <p class="subtitle">Connect to your WiFi network</p>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        {% if success %}
+        <div class="success">{{ success }}</div>
+        {% else %}
+        <form method="POST" action="/connect">
+            <div class="form-group">
+                <label for="ssid">WiFi Network</label>
+                <select name="ssid" id="ssid" required>
+                    <option value="">Select a network...</option>
+                    {% for network in networks %}
+                    <option value="{{ network }}">{{ network }}</option>
+                    {% endfor %}
+                    <option value="__manual__">Enter manually...</option>
+                </select>
+            </div>
+
+            <div class="form-group hidden" id="manual-ssid-group">
+                <label for="manual_ssid">Network Name (SSID)</label>
+                <input type="text" name="manual_ssid" id="manual_ssid" placeholder="Enter network name">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <div class="password-container">
+                    <input type="password" name="password" id="password" placeholder="Enter WiFi password">
+                    <button type="button" class="toggle-password" onclick="togglePassword()">Show</button>
+                </div>
+            </div>
+
+            <button type="submit">Connect</button>
         </form>
+        {% endif %}
     </div>
+
+    <script>
+        document.getElementById('ssid').addEventListener('change', function() {
+            var manualGroup = document.getElementById('manual-ssid-group');
+            if (this.value === '__manual__') {
+                manualGroup.classList.remove('hidden');
+                document.getElementById('manual_ssid').required = true;
+            } else {
+                manualGroup.classList.add('hidden');
+                document.getElementById('manual_ssid').required = false;
+            }
+        });
+
+        function togglePassword() {
+            var pwd = document.getElementById('password');
+            var btn = document.querySelector('.toggle-password');
+            if (pwd.type === 'password') {
+                pwd.type = 'text';
+                btn.textContent = 'Hide';
+            } else {
+                pwd.type = 'password';
+                btn.textContent = 'Show';
+            }
+        }
+    </script>
 </body>
 </html>
 """
 
-HTML_CONNECTING_TEMPLATE = """
+CONNECTING_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Connecting...</title>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Attempt to redirect to a common site after a delay to check connectivity -->
-    <meta http-equiv="refresh" content="15;url=http://connectivitycheck.gstatic.com">
+    <title>Connecting...</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; text-align: center; }
-        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); display: inline-block; }
-        h1 { color: #333; }
-        p { font-size: 1.1em; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            text-align: center;
+            max-width: 380px;
+        }
+        h1 { color: #333; margin-bottom: 16px; }
+        p { color: #666; }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #e0e0e0;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Attempting to Connect</h1>
-        <p>This device will now try to connect to the WiFi network you specified.</p>
-        <p>You will be disconnected from the '{{ ap_ssid }}' network. If the new connection is successful, your device (phone/laptop) should regain internet access through the new network if it's configured to auto-reconnect.</p>
-        <p>This page will try to redirect in 15 seconds. If it doesn't, please check your WiFi settings.</p>
+        <h1>Connecting...</h1>
+        <div class="spinner"></div>
+        <p>Connecting to <strong>{{ ssid }}</strong></p>
+        <p style="margin-top: 16px; font-size: 14px;">
+            This page will close automatically.<br>
+            If it doesn't, you can close it manually.
+        </p>
     </div>
 </body>
 </html>
 """
 
-def init_flask_shared_data(event, creds_store, ap_ssid_for_template):
-    """Initializes shared data for Flask app running in a thread."""
-    global credentials_received_event, received_credentials_store, flask_ap_ssid
-    credentials_received_event = event
-    received_credentials_store = creds_store
-    flask_ap_ssid = ap_ssid_for_template
 
-
-def run_flask_app_threaded(host_ip, port):
-    """Runs the Flask app. Designed to be called in a separate thread."""
+def run_cmd(cmd, check=True, timeout=30):
+    """Run a shell command and return stdout, or None on failure."""
     try:
-        # Use '0.0.0.0' to listen on all available interfaces within the AP network
-        flask_app.run(host='0.0.0.0', port=port, debug=False)
-    except Exception as e:
-        print(f"Flask app failed: {e}")
-
-@flask_app.route('/')
-def index_route():
-    return render_template_string(HTML_FORM_TEMPLATE)
-
-@flask_app.route('/configure', methods=['POST'])
-def configure_route():
-    global received_credentials_store, credentials_received_event, flask_ap_ssid
-    ssid = request.form.get('ssid')
-    password = request.form.get('password')
-
-    if not ssid: # Basic validation
-        return "SSID is required.", 400
-
-    if received_credentials_store is not None:
-        received_credentials_store['ssid'] = ssid
-        received_credentials_store['password'] = password
-    
-    if credentials_received_event:
-        credentials_received_event.set()
-        
-    return render_template_string(HTML_CONNECTING_TEMPLATE, ap_ssid=flask_ap_ssid)
-
-@flask_app.route('/<path:path>')
-def catch_all_route(path):
-    # Handle common captive portal detection paths
-    # Android often uses generate_204
-    if path == "generate_204" or path == "gen_204":
-        print(f"Captive portal check: /{path} -> 204 No Content")
-        return redirect(url_for("index_route"))
-    
-    # iOS, Windows, Kindle etc.
-    common_detection_strings = ["hotspot-detect.html", "success.html", "ncsi.txt", "check_network_status", "kindle-wifi/wifistub.html"]
-    if any(detect_str in path for detect_str in common_detection_strings):
-        print(f"Captive portal check: /{path} -> Redirect to /")
-        return redirect(url_for('index_route'))
-
-    portal_url = f"http://{AP_IP_ADDRESS}:{FLASK_PORT}/"
-    print(f"Catch-all for path '/{path}', request.host: '{request.host}'. Redirecting to portal: {portal_url}")
-    return redirect(portal_url)
-
-
-# --- Helper Functions ---
-def run_command(command, check=True, timeout=15):
-    print(f"Executing: {' '.join(command)}")
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=check, timeout=timeout)
-        if result.stdout.strip():
-            print(f"Stdout: {result.stdout.strip()}")
-        if result.stderr.strip() and not check:
-             print(f"Stderr: {result.stderr.strip()}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=check
+        )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        print(f"Error executing command: {' '.join(command)}")
-        print(f"Return code: {e.returncode}")
-        if e.stdout: print(f"Stdout: {e.stdout.strip()}")
-        if e.stderr: print(f"Stderr: {e.stderr.strip()}")
-        if check: raise
+        print(f"Command failed: {' '.join(cmd)}")
+        print(f"  stderr: {e.stderr}")
         return None
     except subprocess.TimeoutExpired:
-        print(f"Timeout executing command: {' '.join(command)}")
-        if check: raise
+        print(f"Command timed out: {' '.join(cmd)}")
         return None
-    except FileNotFoundError:
-        print(f"Error: Command '{command[0]}' not found. Is it installed and in PATH?")
-        if check: raise
+    except Exception as e:
+        print(f"Command error: {e}")
         return None
 
-def get_wifi_interface_name():
-    global WIFI_IFACE
-    if WIFI_IFACE:
-        return WIFI_IFACE
+
+def get_wifi_interface():
+    """Find the wireless interface name."""
+    output = run_cmd(["iw", "dev"], check=False)
+    if output:
+        for line in output.split('\n'):
+            if 'Interface' in line:
+                return line.split()[-1]
+
+    # Fallback: check common names
+    for iface in ['wlan0', 'wlan1', 'wlp2s0', 'wlp3s0']:
+        if os.path.exists(f"/sys/class/net/{iface}/wireless"):
+            return iface
+
+    return None
+
+
+def check_internet():
+    """Check if we have internet connectivity."""
     try:
-        output = run_command(["iw", "dev"], check=False)
-        if output:
-            for line in output.splitlines():
-                if line.strip().startswith("Interface"):
-                    WIFI_IFACE = line.split("Interface")[1].strip()
-                    print(f"Auto-detected WiFi interface using 'iw dev': {WIFI_IFACE}")
-                    return WIFI_IFACE
-        
-        output = run_command(["nmcli", "-t", "-f", "DEVICE,TYPE", "device", "status"], check=False)
-        if output:
-            for line in output.splitlines():
-                if ":wifi" in line:
-                    WIFI_IFACE = line.split(":")[0]
-                    print(f"Auto-detected WiFi interface using 'nmcli': {WIFI_IFACE}")
-                    return WIFI_IFACE
-    except Exception as e:
-        print(f"Could not auto-detect WiFi interface: {e}")
-
-    if not WIFI_IFACE:
-        print("ERROR: No WiFi interface could be auto-detected. Please set WIFI_IFACE manually in the script.")
-        return None
-    return WIFI_IFACE
-
-
-def check_internet_connection(iface):
-    if not iface: return False
-
-    # Check NetworkManager's general status.
-    # "full" means link and IP are likely okay, but internet access is not guaranteed.
-    # "limited" or "none" often means no internet.
-    # We use this as an early indicator but will always proceed to more robust checks
-    # unless connectivity is clearly "none".
-    try:
-        status_output = run_command(["nmcli", "general", "status"], timeout=5, check=True)
-        # Log the status, but don't make a decision based on it yet.
-        # Ping and HTTP checks are more definitive.
-        if status_output and status_output.splitlines():
-            print(f"NetworkManager general status: {status_output.splitlines()[0]}")
-        else:
-            print("NetworkManager general status: No output or empty.")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e_nmcli:
-        # This can happen if NetworkManager is not fully ready or the command fails.
-        # It's not necessarily fatal for internet connectivity if the interface is otherwise configured.
-        print("Could not get NetworkManager general status or command failed. Proceeding with ping/HTTP checks.")
-    except Exception as e:
-        print(f"Error during nmcli general status check: {e}. Proceeding with ping/HTTP checks.")
-
-    print("Attempting robust internet checks (ping and HTTP)...")
-
-    # Ping check
-    ping_targets = ["8.8.8.8", "1.1.1.1"] # Reliable public DNS servers
-    ping_successful_for_any_target = False
-    for target_ip in ping_targets:
-        try:
-            # Send 1 ping packet, wait up to 2 seconds for a reply. Command timeout 3s.
-            run_command(["ping", "-I", iface, "-c", "1", "-W", "2", target_ip], check=True, timeout=3)
-            print(f"Ping to {target_ip} successful.")
-            ping_successful_for_any_target = True
-            break # Exit loop if one target is reachable
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            print(f"Ping to {target_ip} failed.")
-        except Exception as e: # Catch other potential errors like FileNotFoundError for ping
-            print(f"Unexpected error during ping to {target_ip}: {e}")
-            # Continue to next target or fail if this was the last one
-
-    if not ping_successful_for_any_target:
-        print("All ping targets failed. Internet connection likely down.")
-        return False
-
-    # HTTP check (only if at least one ping was successful)
-    http_check_url = "http://connectivitycheck.gstatic.com/generate_204"
-    http_attempts = 3
-    http_delay_between_attempts = 3 # seconds
-
-    for attempt in range(http_attempts):
-        try:
-            # Google's generate_204 is a standard check; it should return HTTP 204 No Content.
-            response = requests.get(http_check_url, timeout=5)
-            if response.status_code == 204:
-                print(f"HTTP check to {http_check_url} successful (204 No Content) on attempt {attempt+1}. Internet confirmed.")
-                return True
-            else:
-                print(f"HTTP check to {http_check_url} (attempt {attempt+1}) returned status {response.status_code} (expected 204).")
-                # If this is the last attempt, loop will end, and function will return False below.
-        except requests.exceptions.RequestException as e:
-            print(f"HTTP check to {http_check_url} (attempt {attempt+1}) failed: {e}")
-            # If this is the last attempt, loop will end, and function will return False below.
-        
-        if attempt < http_attempts - 1:
-            print(f"Waiting {http_delay_between_attempts}s before retrying HTTP check...")
-            time.sleep(http_delay_between_attempts)
-        else: # Last attempt failed or resulted in unexpected status code
-            print("All HTTP check attempts failed or did not confirm connectivity. Internet not confirmed via HTTP.")
-            return False
-    
-    # Fallback, should ideally not be reached if the loop logic is correct and covers all cases.
-        return False
-
-def log_network_diagnostics(iface):
-    if not iface:
-        print("Cannot log network diagnostics: no interface provided.")
-        return
-    print(f"--- Network Diagnostics for {iface} at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
-    run_command(["nmcli", "device", "status"], check=False, timeout=5)
-    run_command(["nmcli", "-p", "connection", "show", "--active"], check=False, timeout=5) # -p for pretty
-    run_command(["ip", "addr", "show", "dev", iface], check=False, timeout=5)
-    run_command(["ip", "route", "show", "dev", iface], check=False, timeout=5) # Routes specific to iface
-    run_command(["ip", "route", "show", "default"], check=False, timeout=5)    # Default routes
-    print(f"--- End Network Diagnostics for {iface} ---")
-
-dnsmasq_process = None # Global variable to hold the dnsmasq subprocess
-DNSMASQ_LOG_LINES = [] # Store recent dnsmasq log lines
-
-def start_access_point_manual_ip(iface):
-    """Starts the AP using nmcli with manual IP, no shared/internal dnsmasq."""
-    print(f"Attempting to start AP (Manual IP): {AP_SSID} on {iface}")
-    if not iface: return False
-    try:
-        run_command(["nmcli", "radio", "wifi", "on"], check=False)
-        run_command(["nmcli", "device", "set", iface, "managed", "yes"], check=False)
-        run_command(["nmcli", "device", "disconnect", iface], check=False)
-        time.sleep(1)
-        run_command(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False)
-        time.sleep(1)
-
-        print(f"Creating AP connection profile '{AP_CONNECTION_NAME}' with manual IP...")
-        cmd_add_ap = [
-            "nmcli", "connection", "add", "type", "wifi", "ifname", iface,
-            "con-name", AP_CONNECTION_NAME, "autoconnect", "no", "ssid", AP_SSID,
-            "mode", "ap", "802-11-wireless.band", "bg",
-            "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", AP_PSK,
-            "ipv4.method", "manual", "ipv4.addresses", f"{AP_IP_ADDRESS}/24"
-        ]
-        run_command(cmd_add_ap)
-        time.sleep(1)
-
-        print(f"Activating AP connection '{AP_CONNECTION_NAME}'...")
-        run_command(["nmcli", "connection", "up", AP_CONNECTION_NAME])
-        # time.sleep(3) # Replaced by a more robust IP check
-
-        print(f"Verifying IP address {AP_IP_ADDRESS} on interface {iface}...")
-        ip_assigned_successfully = False
-        # Check for up to 10 seconds for the IP to be assigned
-        for i in range(10): 
-            # Use check=False as 'ip addr show' might return non-zero if IP not yet assigned or iface is briefly down
-            # A short timeout for the command itself is also good.
-            ip_output = run_command(["ip", "-4", "addr", "show", iface], check=False, timeout=3)
-            if ip_output and AP_IP_ADDRESS in ip_output:
-                print(f"IP address {AP_IP_ADDRESS} confirmed on {iface}.")
-                ip_assigned_successfully = True
-                break
-            else:
-                print(f"Attempt {i+1}/10: IP address {AP_IP_ADDRESS} not yet found on {iface}. Waiting 1s...")
-                time.sleep(1)
-        
-        if not ip_assigned_successfully:
-            print(f"CRITICAL: Failed to confirm IP address {AP_IP_ADDRESS} on {iface} after AP activation. dnsmasq will likely fail.")
-            return False # This will trigger cleanup and retry logic in main loop
-        return True
-    except Exception as e:
-        print(f"Failed to start AP (manual IP setup): {e}")
-        run_command(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False)
-        return False
-
-def stop_access_point(iface):
-    print(f"Stopping AP '{AP_CONNECTION_NAME}'...")
-    if not iface: return True
-    try:
-        # Explicitly disconnect the interface first to release it
-        print(f"Explicitly disconnecting interface {iface} before AP teardown.")
-        run_command(["nmcli", "device", "disconnect", iface], check=False, timeout=10)
-        time.sleep(1) # Give a moment for disconnect to take effect
-
-        run_command(["nmcli", "connection", "down", AP_CONNECTION_NAME], check=False, timeout=10)
-        run_command(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False, timeout=10)
-
-        iptables_cmd_delete = ["sudo", "iptables", "-t", "nat", "-D", "PREROUTING", "-i", iface, "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", f"{AP_IP_ADDRESS}:{FLASK_PORT}"]
-        run_command(iptables_cmd_delete, check=False)
-        print("Removed iptables port redirection rule (if it existed).")
-
-        # Ensure interface is set to managed so NM can use it for client connections
-        print(f"Ensuring interface {iface} is managed by NetworkManager.")
-        run_command(["nmcli", "device", "set", iface, "managed", "yes"], check=False)
-        time.sleep(1) # Give a moment for the setting to apply
-
-        run_command(["nmcli", "device", "wifi", "rescan"], check=False)
-        print(f"Rescan initiated on {iface}. NetworkManager will attempt to connect to known networks.")
-        return True
-    except Exception as e:
-        print(f"Error stopping AP: {e}")
-        return False
-
-def start_manual_dnsmasq(iface):
-    global dnsmasq_process, DNSMASQ_LOG_LINES
-    DNSMASQ_LOG_LINES = [] # Clear previous logs
-
-    print(f"Starting manual dnsmasq on {iface} ({AP_IP_ADDRESS})...")
-
-    ip_parts = AP_IP_ADDRESS.split('.')
-    if len(ip_parts) != 4:
-        print(f"Invalid AP_IP_ADDRESS format: {AP_IP_ADDRESS}")
-        return False
-    subnet_base = ".".join(ip_parts[:3]) + "."
-    
-    # Try to stop potentially conflicting services
-    try: 
-        run_command(["sudo", "systemctl", "stop", "dnsmasq.service"], check=False)
-    except Exception as e:
-        print(f"Note: Could not stop system dnsmasq.service (may not be running or installed): {e}")
-    try:
-        run_command(["sudo", "systemctl", "stop", "systemd-resolved.service"], check=False)
-        print("Attempted to stop systemd-resolved.service to free up port 53 if it was in use.")
-    except Exception as e:
-        print(f"Note: Could not stop systemd-resolved.service (may not be running or installed): {e}")
-
-    try: # Kill any old instances we might have started or that conflict on the interface
-        pids_output = run_command(["pgrep", "-f", f"dnsmasq.*{iface}"], check=False)
-        if pids_output:
-            pids = pids_output.splitlines()
-            for pid in pids:
-                if pid:
-                    print(f"Killing existing dnsmasq process {pid} for interface {iface}")
-                    run_command(["sudo", "kill", "-9", pid], check=False)
-    except Exception as e:
-        print(f"Error trying to kill old dnsmasq processes for {iface}: {e}")
-
-    dnsmasq_cmd = [
-        "sudo", "/usr/sbin/dnsmasq",
-        "-k", # Keep running, do not fork
-        "-d", # Log to stderr (DEBUG MODE - VERY VERBOSE for troubleshooting)
-        "--log-dhcp", # Log DHCP transactions
-        "-i", iface,
-        f"--address=/#/{AP_IP_ADDRESS}",
-        f"--dhcp-range={subnet_base}100,{subnet_base}200,12h",
-        f"--dhcp-option=option:router,{AP_IP_ADDRESS}",
-        f"--dhcp-option=option:dns-server,{AP_IP_ADDRESS}",
-        "--no-resolv", # Do not use /etc/resolv.conf for upstream
-        "--user=root", # Run as root to avoid chown issues for PID file
-        f"--pid-file=/run/dnsmasq-manual-{iface}.pid"
-    ]
-    print(f"Executing manual dnsmasq command: {' '.join(dnsmasq_cmd)}")
-    try:
-        # Using Popen with line-buffered stderr reading is complex.
-        # For now, let's check exit status and then dump stderr if it fails.
-        # If it runs, the -d flag will make it log to its stderr, which won't be directly visible
-        # unless we read it asynchronously or it crashes.
-        # A simpler approach for now: if it crashes, its stderr will be available via communicate().
-        dnsmasq_process = subprocess.Popen(dnsmasq_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
-        
-        time.sleep(2) # Give dnsmasq a moment to start and potentially fail or log initial messages
-
-        if dnsmasq_process.poll() is not None: # Check if it exited immediately
-            print("CRITICAL: Manual dnsmasq process exited prematurely.")
-            # Capture all output
-            stdout, stderr = dnsmasq_process.communicate(timeout=5) 
-            if stdout: 
-                print(f"dnsmasq stdout:\n{stdout}")
-                DNSMASQ_LOG_LINES.extend(stdout.splitlines())
-            if stderr: 
-                print(f"dnsmasq stderr (this should contain debug info):\n{stderr}")
-                DNSMASQ_LOG_LINES.extend(stderr.splitlines())
-            dnsmasq_process = None
-            return False
-        
-        print("Manual dnsmasq process appears to be running. The -d flag means it will log verbosely to its stderr.")
-        print("If captive portal issues persist, check system logs for dnsmasq or stop this script and run the dnsmasq command manually in a terminal to see live output.")
-        return True
-    except subprocess.TimeoutExpired: # From communicate() if poll() was not None
-        print("CRITICAL: Timeout while trying to get output from (likely failed) dnsmasq process.")
-        if dnsmasq_process:
-            dnsmasq_process.kill() # Ensure it's killed
-            # Try to get any remaining output
-            stdout, stderr = dnsmasq_process.communicate()
-            if stdout: print(f"dnsmasq stdout (on timeout kill):\n{stdout}")
-            if stderr: print(f"dnsmasq stderr (on timeout kill):\n{stderr}")
-        dnsmasq_process = None
-        return False
-    except Exception as e:
-        print(f"CRITICAL: Exception during manual dnsmasq startup: {e}")
-        if dnsmasq_process and dnsmasq_process.poll() is None: # If it's still running despite exception
-            dnsmasq_process.kill()
-        # Attempt to get output if Popen object exists
-        if dnsmasq_process:
-            stdout, stderr = dnsmasq_process.communicate(timeout=2) # Try to get output
-            if stdout: print(f"dnsmasq stdout (on exception):\n{stdout}")
-            if stderr: print(f"dnsmasq stderr (on exception):\n{stderr}")
-        dnsmasq_process = None
-        return False
-
-def stop_manual_dnsmasq():
-    global dnsmasq_process
-    if dnsmasq_process:
-        print("Stopping manual dnsmasq process...")
-        try:
-            # dnsmasq_process.terminate() # Send SIGTERM
-            # dnsmasq is often run as root, so we need sudo to kill it by PID
-            pid_file_path = f"/run/dnsmasq-manual-{get_wifi_interface_name()}.pid" # Assuming WIFI_IFACE is set
-            if os.path.exists(pid_file_path):
-                with open(pid_file_path, 'r') as f:
-                    pid = f.read().strip()
-                if pid:
-                    print(f"Found PID {pid} from {pid_file_path}. Attempting to kill...")
-                    run_command(["sudo", "kill", pid], check=False) # SIGTERM
-                    time.sleep(1)
-                    run_command(["sudo", "kill", "-0", pid], check=False) # Check if process still exists
-                    # If it still exists, SIGKILL
-                    if run_command(["pgrep", "-f", f"dnsmasq.*{get_wifi_interface_name()}"], check=False): # Re-check if any dnsmasq for iface exists
-                         print(f"dnsmasq (PID {pid}) did not terminate with SIGTERM, sending SIGKILL.")
-                         run_command(["sudo", "kill", "-9", pid], check=False)
-            else: # Fallback if PID file not found or empty
-                print("PID file for manual dnsmasq not found. Attempting general terminate/kill.")
-                dnsmasq_process.terminate()
-                dnsmasq_process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            print("dnsmasq (via Popen object) did not terminate, killing...")
-            dnsmasq_process.kill()
-        except Exception as e:
-            print(f"Error stopping manual dnsmasq: {e}. Trying to kill any remaining dnsmasq for the interface.")
-            # General cleanup for any dnsmasq on the interface
-            iface = get_wifi_interface_name()
-            if iface:
-                pids_output = run_command(["pgrep", "-f", f"dnsmasq.*{iface}"], check=False)
-                if pids_output:
-                    pids = pids_output.splitlines()
-                    for pid_val in pids:
-                        if pid_val:
-                            print(f"Force killing dnsmasq process {pid_val}")
-                            run_command(["sudo", "kill", "-9", pid_val], check=False)
-        finally:
-            dnsmasq_process = None
-            # Clean up PID file
-            iface = get_wifi_interface_name()
-            if iface:
-                pid_file_path = f"/run/dnsmasq-manual-{iface}.pid"
-                if os.path.exists(pid_file_path):
-                    try:
-                        run_command(["sudo", "rm", "-f", pid_file_path], check=False)
-                    except Exception as e_rm:
-                        print(f"Could not remove dnsmasq PID file {pid_file_path}: {e_rm}")
-        print("Manual dnsmasq process stopped.")
-
-
-def connect_to_target_wifi(iface, ssid, password):
-    print(f"Attempting to configure and connect to WiFi: {ssid}")
-    if not iface: return False
-
-    # Use a consistent connection name for the target WiFi.
-    # This makes it easier to manage (e.g., delete if exists, check status).
-    # Replace non-alphanumeric characters for a valid nmcli connection name.
-    connection_name = f"target-{re.sub(r'[^a-zA-Z0-9_-]', '_', ssid)}"
-    print(f"Using NetworkManager connection name: {connection_name}")
-
-    try:
-        # Ensure the interface is managed and ready
-        run_command(["nmcli", "device", "set", iface, "managed", "yes"], check=False)
-        run_command(["nmcli", "device", "disconnect", iface], check=False, timeout=10)
-        time.sleep(1)
-
-        # Delete any existing connection with this name to ensure a clean slate
-        run_command(["nmcli", "connection", "delete", connection_name], check=False, timeout=10)
-        time.sleep(1)
-        # Also try deleting by the raw SSID in case an old profile exists from a previous version
-        # or manual setup where the SSID itself was used as the connection name.
-        run_command(["nmcli", "connection", "delete", ssid], check=False, timeout=10)
-        time.sleep(1)
-
-
-        print(f"Adding new connection profile '{connection_name}' for SSID '{ssid}' with autoconnect enabled...")
-        add_cmd = [
-            "nmcli", "connection", "add",
-            "type", "wifi",
-            "con-name", connection_name,
-            "ifname", iface,
-            "ssid", ssid,
-            "connection.autoconnect", "yes", # Explicitly enable autoconnect
-            "wifi-sec.key-mgmt", "wpa-psk" # Assuming WPA-PSK, common case
-        ]
-        if password: # Only add psk if password is provided
-            add_cmd.extend(["wifi-sec.psk", password])
-        # If open networks are a primary target, this part might need adjustment
-        # e.g. add_cmd.extend(["wifi-sec.key-mgmt", "none"]) if no password
-
-        run_command(add_cmd, timeout=15) # This creates the profile
-        time.sleep(1)
-
-        print(f"Attempting to activate connection '{connection_name}'...")
-        # Use 'nmcli connection up' which is more direct for existing profiles
-        run_command(["nmcli", "connection", "up", connection_name], timeout=45)
-        
-        print(f"Connection to '{ssid}' (profile '{connection_name}') initiated. Verifying internet access (up to 30s)...")
-        internet_verified = False
-        for i in range(6): # Check for 30 seconds (6 * 5s)
-            time.sleep(5)
-            if check_internet_connection(iface):
-                print(f"Successfully connected to '{ssid}' and internet access verified.")
-                internet_verified = True
-                break
-            print(f"Internet check {i+1}/6 for '{ssid}' failed. Retrying...")
-        
-        if internet_verified:
-            return True # Profile is saved with autoconnect=yes, and internet is working now.
-        else:
-            print(f"Connected to '{ssid}' (profile '{connection_name}' is saved with autoconnect=yes), "
-                  "but failed to verify internet access after timeout.")
-            print("The WiFi profile has been saved. NetworkManager will attempt to use it on next boot or if the network becomes available.")
-            # We DO NOT delete the connection here. Let it persist.
-            return False # Return False to indicate immediate internet is not available.
-
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        print(f"Failed to add or activate connection for {ssid} via nmcli.")
-        # Even on failure here, if 'nmcli connection add' succeeded, the profile might exist.
-        # It's probably safer to leave it for NetworkManager to handle or for manual cleanup.
-        print(f"The connection profile '{connection_name}' may or may not have been saved. Check 'nmcli connection show'.")
-        return False
-    except Exception as e:
-        print(f"An unexpected error occurred while trying to connect to {ssid}: {e}")
-        return False
-
-def attempt_fallback_connection(iface):
-    """
-    Attempt to connect to the fallback WiFi network.
-    Called after captive portal times out without receiving credentials.
-    Returns True if successfully connected with internet, False otherwise.
-    """
-    global FALLBACK_SSID, FALLBACK_PASSWORD, FALLBACK_RETRY_ATTEMPTS, FALLBACK_ENABLED
-
-    # Load/reload fallback configuration
-    load_fallback_config()
-
-    if not FALLBACK_ENABLED:
-        print("Fallback WiFi connection is disabled in configuration.")
-        return False
-
-    if not FALLBACK_SSID:
-        print("No fallback SSID configured.")
-        return False
-
-    print(f"\n{'='*50}")
-    print(f"ATTEMPTING FALLBACK WiFi CONNECTION")
-    print(f"SSID: '{FALLBACK_SSID}'")
-    print(f"Retry attempts: {FALLBACK_RETRY_ATTEMPTS}")
-    print(f"{'='*50}\n")
-
-    for attempt in range(1, FALLBACK_RETRY_ATTEMPTS + 1):
-        print(f"--- Fallback attempt {attempt}/{FALLBACK_RETRY_ATTEMPTS} ---")
-
-        # Scan for the fallback network to see if it's in range
-        print(f"Scanning for fallback network '{FALLBACK_SSID}'...")
-        run_command(["nmcli", "device", "wifi", "rescan"], check=False, timeout=10)
-        time.sleep(3)  # Allow scan to complete
-
-        scan_output = run_command(
-            ["nmcli", "-t", "-f", "SSID", "device", "wifi", "list"],
-            check=False, timeout=10
+        result = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+             "--connect-timeout", "5", INTERNET_CHECK_URL],
+            capture_output=True,
+            text=True,
+            timeout=10
         )
+        return result.stdout.strip() == "204"
+    except:
+        return False
 
-        if scan_output and FALLBACK_SSID in scan_output:
-            print(f"Fallback network '{FALLBACK_SSID}' found in range. Attempting connection...")
 
-            if connect_to_target_wifi(iface, FALLBACK_SSID, FALLBACK_PASSWORD):
-                print(f"\n{'='*50}")
-                print(f"SUCCESS: Connected to fallback network '{FALLBACK_SSID}'!")
-                print(f"Device should now be SSH accessible.")
-                print(f"{'='*50}\n")
-                return True
-            else:
-                print(f"Failed to connect to fallback network or no internet on attempt {attempt}.")
-        else:
-            print(f"Fallback network '{FALLBACK_SSID}' not found in range on attempt {attempt}.")
+def scan_networks():
+    """Scan for available WiFi networks."""
+    global wifi_iface
 
-        if attempt < FALLBACK_RETRY_ATTEMPTS:
-            print(f"Waiting 5 seconds before next attempt...")
-            time.sleep(5)
+    # Trigger a fresh scan
+    run_cmd(["nmcli", "device", "wifi", "rescan"], check=False, timeout=10)
+    time.sleep(2)
 
-    print(f"\nAll {FALLBACK_RETRY_ATTEMPTS} fallback attempts failed.")
-    print("Will restart captive portal.\n")
+    # Get list of networks
+    output = run_cmd(
+        ["nmcli", "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"],
+        check=False,
+        timeout=10
+    )
+
+    networks = []
+    seen = set()
+
+    if output:
+        for line in output.split('\n'):
+            if ':' in line:
+                parts = line.split(':')
+                ssid = parts[0].strip()
+                if ssid and ssid not in seen and ssid != AP_SSID:
+                    seen.add(ssid)
+                    networks.append(ssid)
+
+    return networks
+
+
+def connect_to_wifi(ssid, password):
+    """Connect to a WiFi network using NetworkManager."""
+    global wifi_iface
+
+    print(f"Attempting to connect to '{ssid}'...")
+
+    # Delete any existing connection with this name
+    run_cmd(["nmcli", "connection", "delete", ssid], check=False)
+
+    # Create and activate new connection
+    if password:
+        result = run_cmd([
+            "nmcli", "device", "wifi", "connect", ssid,
+            "password", password,
+            "ifname", wifi_iface
+        ], check=False, timeout=30)
+    else:
+        result = run_cmd([
+            "nmcli", "device", "wifi", "connect", ssid,
+            "ifname", wifi_iface
+        ], check=False, timeout=30)
+
+    if result is None:
+        print(f"Failed to connect to '{ssid}'")
+        return False
+
+    # Wait for connection to establish and verify internet
+    time.sleep(5)
+
+    for i in range(3):
+        if check_internet():
+            print(f"Successfully connected to '{ssid}' with internet!")
+            return True
+        time.sleep(2)
+
+    print(f"Connected to '{ssid}' but no internet detected")
     return False
 
-# --- Main Application Logic ---
+
+def check_known_networks():
+    """Check if any known/saved networks are available and connect."""
+    global wifi_iface
+
+    print("Checking for known networks...")
+
+    # Get list of saved connections
+    saved = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], check=False)
+    saved_wifi = []
+
+    if saved:
+        for line in saved.split('\n'):
+            if ':802-11-wireless' in line:
+                name = line.split(':')[0]
+                if name != "captive-portal-ap":
+                    saved_wifi.append(name)
+
+    if not saved_wifi:
+        print("No saved WiFi connections found")
+        return False
+
+    print(f"Saved WiFi connections: {saved_wifi}")
+
+    # Scan for available networks
+    available = scan_networks()
+    print(f"Available networks: {available}")
+
+    # Try to connect to any saved network that's available
+    for saved_name in saved_wifi:
+        if saved_name in available:
+            print(f"Found saved network '{saved_name}', attempting connection...")
+            result = run_cmd([
+                "nmcli", "connection", "up", saved_name
+            ], check=False, timeout=30)
+
+            if result is not None:
+                time.sleep(5)
+                if check_internet():
+                    print(f"Connected to known network '{saved_name}'!")
+                    return True
+
+    print("Could not connect to any known network")
+    return False
+
+
+def start_access_point():
+    """Start the WiFi access point for captive portal."""
+    global wifi_iface, ap_active
+
+    print(f"Starting access point '{AP_SSID}' on {wifi_iface}...")
+
+    # Stop any existing AP connection
+    run_cmd(["nmcli", "connection", "delete", "captive-portal-ap"], check=False)
+
+    # Bring down the interface first
+    run_cmd(["nmcli", "device", "disconnect", wifi_iface], check=False)
+    time.sleep(1)
+
+    # Create hotspot
+    result = run_cmd([
+        "nmcli", "connection", "add",
+        "type", "wifi",
+        "con-name", "captive-portal-ap",
+        "ifname", wifi_iface,
+        "ssid", AP_SSID,
+        "mode", "ap",
+        "ipv4.method", "shared",
+        "ipv4.addresses", f"{AP_IP}/24",
+        "wifi-sec.key-mgmt", "wpa-psk",
+        "wifi-sec.psk", AP_PASSWORD
+    ], check=False)
+
+    if result is None:
+        print("Failed to create AP connection")
+        return False
+
+    # Activate the connection
+    result = run_cmd(["nmcli", "connection", "up", "captive-portal-ap"], check=False)
+
+    if result is None:
+        print("Failed to activate AP")
+        return False
+
+    time.sleep(2)
+
+    # Start dnsmasq for better DHCP/DNS control
+    start_dnsmasq()
+
+    ap_active = True
+    print(f"Access point '{AP_SSID}' started on {AP_IP}")
+    return True
+
+
+def stop_access_point():
+    """Stop the access point."""
+    global ap_active
+
+    print("Stopping access point...")
+
+    stop_dnsmasq()
+    run_cmd(["nmcli", "connection", "down", "captive-portal-ap"], check=False)
+    run_cmd(["nmcli", "connection", "delete", "captive-portal-ap"], check=False)
+
+    ap_active = False
+    print("Access point stopped")
+
+
+def start_dnsmasq():
+    """Start dnsmasq for DHCP and DNS hijacking (captive portal detection)."""
+    # Kill any existing dnsmasq
+    run_cmd(["pkill", "-9", "dnsmasq"], check=False)
+    time.sleep(1)
+
+    # Write dnsmasq config
+    config = f"""
+interface={wifi_iface}
+bind-interfaces
+dhcp-range={AP_DHCP_RANGE_START},{AP_DHCP_RANGE_END},{AP_SUBNET},24h
+dhcp-option=option:router,{AP_IP}
+dhcp-option=option:dns-server,{AP_IP}
+
+# Captive portal detection - redirect all DNS to us
+address=/#/{AP_IP}
+"""
+
+    config_path = "/tmp/dnsmasq-captive.conf"
+    with open(config_path, 'w') as f:
+        f.write(config)
+
+    # Start dnsmasq
+    result = run_cmd([
+        "dnsmasq", "-C", config_path, "--log-queries", "--log-facility=/tmp/dnsmasq.log"
+    ], check=False)
+
+    print("dnsmasq started for captive portal")
+
+
+def stop_dnsmasq():
+    """Stop dnsmasq."""
+    run_cmd(["pkill", "-9", "dnsmasq"], check=False)
+
+
+# --- Flask Routes ---
+
+@app.route('/')
+def index():
+    """Main captive portal page."""
+    networks = scan_networks()
+    return render_template_string(HTML_TEMPLATE, networks=networks, error=None, success=None)
+
+
+@app.route('/connect', methods=['POST'])
+def connect():
+    """Handle WiFi connection form submission."""
+    global received_ssid, received_password
+
+    ssid = request.form.get('ssid', '')
+    password = request.form.get('password', '')
+
+    # Handle manual SSID entry
+    if ssid == '__manual__':
+        ssid = request.form.get('manual_ssid', '').strip()
+
+    if not ssid:
+        networks = scan_networks()
+        return render_template_string(HTML_TEMPLATE, networks=networks,
+                                      error="Please select or enter a network name")
+
+    # Store credentials and signal main thread
+    received_ssid = ssid
+    received_password = password
+    credentials_received.set()
+
+    return render_template_string(CONNECTING_TEMPLATE, ssid=ssid)
+
+
+# Captive portal detection endpoints
+# These are checked by devices to detect captive portals
+
+@app.route('/generate_204')
+@app.route('/gen_204')
+def android_check():
+    """Android captive portal check - return redirect to trigger portal."""
+    return redirect('http://' + AP_IP + '/', code=302)
+
+
+@app.route('/hotspot-detect.html')
+@app.route('/library/test/success.html')
+def apple_check():
+    """Apple captive portal check."""
+    return redirect('http://' + AP_IP + '/', code=302)
+
+
+@app.route('/ncsi.txt')
+@app.route('/connecttest.txt')
+def windows_check():
+    """Windows captive portal check."""
+    return redirect('http://' + AP_IP + '/', code=302)
+
+
+@app.route('/canonical.html')
+@app.route('/success.txt')
+def firefox_check():
+    """Firefox captive portal check."""
+    return redirect('http://' + AP_IP + '/', code=302)
+
+
+# Catch-all route for any other requests
+@app.route('/<path:path>')
+def catch_all(path):
+    """Redirect all other requests to main page."""
+    return redirect('http://' + AP_IP + '/', code=302)
+
+
+def run_flask():
+    """Run Flask server in a thread."""
+    # Suppress Flask startup messages
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+
+    app.run(host='0.0.0.0', port=FLASK_PORT, threaded=True)
+
+
+def known_network_checker():
+    """Background thread to periodically check for known networks."""
+    global wifi_iface
+
+    while not shutdown_flag.is_set():
+        # Wait for interval, but check shutdown flag periodically
+        for _ in range(KNOWN_NETWORK_CHECK_INTERVAL):
+            if shutdown_flag.is_set() or credentials_received.is_set():
+                return
+            time.sleep(1)
+
+        if shutdown_flag.is_set() or credentials_received.is_set():
+            return
+
+        print("\n--- Periodic check for known networks ---")
+
+        # Temporarily stop AP to scan
+        stop_access_point()
+        time.sleep(2)
+
+        if check_known_networks():
+            print("Connected to known network during periodic check!")
+            credentials_received.set()  # Signal main loop to exit
+            return
+
+        # No known network found, restart AP
+        print("No known network available, restarting AP...")
+        start_access_point()
+
+
+def signal_handler(sig, frame):
+    """Handle shutdown signals."""
+    print("\nShutdown signal received...")
+    shutdown_flag.set()
+    credentials_received.set()  # Unblock any waits
+
+
 def main():
+    global wifi_iface, received_ssid, received_password
+
+    # Check root
     if os.geteuid() != 0:
-        print("This script needs to be run as root (sudo). Exiting.")
-        return
+        print("This script must be run as root (sudo)")
+        sys.exit(1)
 
-    current_wifi_iface = get_wifi_interface_name()
-    if not current_wifi_iface:
-        return
+    # Setup signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
-    print(f"Using WiFi interface: {current_wifi_iface}")
-    print(f"Captive Portal AP will be: SSID='{AP_SSID}', Password='{AP_PSK}'")
-    print(f"Captive Portal Web UI will be at: http://{AP_IP_ADDRESS}:{FLASK_PORT}")
+    print("=" * 50)
+    print("Album Player WiFi Provisioning")
+    print("=" * 50)
 
-    # --- Initial Network Check and Grace Period ---
-    # Give NetworkManager a chance to connect to known networks on startup.
-    print("Performing initial check for existing internet connection...")
-    print(f"Ensuring WiFi radio is on and {current_wifi_iface} is managed by NetworkManager.")
-    try:
-        run_command(["nmcli", "radio", "wifi", "on"], check=False) # Ensure WiFi radio is on
-        run_command(["nmcli", "device", "set", current_wifi_iface, "managed", "yes"], check=False) # Ensure NM manages the iface
-        time.sleep(2) # Give NetworkManager a moment to process these settings
-        run_command(["nmcli", "device", "wifi", "rescan"], check=False) # Trigger a scan for networks
-        print(f"Initial scan triggered on {current_wifi_iface}. Waiting for potential auto-connection...")
-        time.sleep(15) # Increased: Allow scan to initiate and potentially connect.
-    except Exception as e:
-        # These commands are best-effort at startup; script can continue if they have minor issues.
-        print(f"Warning: Error during initial interface setup for {current_wifi_iface}: {e}")
+    # Find WiFi interface
+    wifi_iface = get_wifi_interface()
+    if not wifi_iface:
+        print("ERROR: No WiFi interface found!")
+        sys.exit(1)
+    print(f"Using WiFi interface: {wifi_iface}")
 
-    INITIAL_CONNECTION_WAIT_TOTAL = 45  # Total seconds to wait for an initial connection
-    INITIAL_CONNECTION_WAIT_INTERVAL = 5 # Seconds between checks
-    print(f"Waiting up to {INITIAL_CONNECTION_WAIT_TOTAL}s for NetworkManager to connect to a known WiFi network...")
+    # Initial connectivity check
+    print("\nChecking for existing internet connection...")
 
-    initial_connection_established = False
-    for i in range(INITIAL_CONNECTION_WAIT_TOTAL // INITIAL_CONNECTION_WAIT_INTERVAL):
-        if check_internet_connection(current_wifi_iface):
-            print("Successfully connected to a known network with internet upon startup.")
-            initial_connection_established = True
-            break
-        print(f"Initial connection check ({i+1}/{INITIAL_CONNECTION_WAIT_TOTAL // INITIAL_CONNECTION_WAIT_INTERVAL}) failed. Waiting {INITIAL_CONNECTION_WAIT_INTERVAL}s...")
-        if i < (INITIAL_CONNECTION_WAIT_TOTAL // INITIAL_CONNECTION_WAIT_INTERVAL) - 1: # Don't sleep after the last check
-            time.sleep(INITIAL_CONNECTION_WAIT_INTERVAL)
+    # Give NetworkManager a chance to auto-connect
+    for i in range(6):  # 30 seconds total
+        if check_internet():
+            print("Internet connection available. WiFi provisioning not needed.")
+            sys.exit(0)
+        print(f"  Waiting for connection... ({(i+1)*5}s)")
+        time.sleep(5)
 
-    if not initial_connection_established:
-        print(f"No internet connection established after {INITIAL_CONNECTION_WAIT_TOTAL}s grace period.")
-    else:
-        # Internet was found during the initial boot-up grace period.
-        # The script's primary job (getting initial connectivity) is done,
-        # or not needed because connectivity already exists. Stop the service.
-        print("Internet connection present on boot. Stopping wificonnect service as it's not needed.")
-        run_command(["sudo", "systemctl", "stop", "wificonnect.service"], check=False)
+    # No internet, check for known networks
+    print("\nNo internet. Checking for known networks...")
+    if check_known_networks():
+        print("Connected to known network!")
         sys.exit(0)
-    # --- End of Initial Network Check ---
 
-    _credentials_store = {} 
-    _credentials_event = threading.Event()
-    init_flask_shared_data(_credentials_event, _credentials_store, AP_SSID)
-    
-    # This state variable will determine if we are in 'monitoring' or 'AP setup' mode.
-    # It's initialized by the outcome of the startup grace period.
-    internet_is_up = initial_connection_established
-    flask_server_thread = None
+    # No connection possible, start captive portal
+    print("\n" + "=" * 50)
+    print("Starting Captive Portal Mode")
+    print("=" * 50)
 
+    if not start_access_point():
+        print("ERROR: Failed to start access point!")
+        sys.exit(1)
+
+    # Start Flask server in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print(f"Captive portal running at http://{AP_IP}/")
+    print(f"Connect to WiFi network '{AP_SSID}' (password: {AP_PASSWORD})")
+
+    # Start background thread to check for known networks
+    checker_thread = threading.Thread(target=known_network_checker, daemon=True)
+    checker_thread.start()
+
+    # Main loop - wait for credentials
     try:
-        while True:
-            if internet_is_up:
-                # We believe internet is up, or was up at the last check.
-                # Monitor for MONITOR_INTERVAL, then re-check.
-                print(f"Internet connection active or assumed. Monitoring on {current_wifi_iface} for {MONITOR_INTERVAL}s...")
-                time.sleep(MONITOR_INTERVAL)
-                if check_internet_connection(current_wifi_iface):
-                    print("Internet connection confirmed. Continuing to monitor.")
-                    # internet_is_up remains True
-                    continue # Back to the start of the while loop, will enter this block again
+        while not shutdown_flag.is_set():
+            # Wait for credentials (with timeout to allow periodic checks)
+            if credentials_received.wait(timeout=10):
+                if shutdown_flag.is_set():
+                    break
+
+                if received_ssid:
+                    print(f"\nCredentials received for '{received_ssid}'")
+
+                    # Stop AP and connect to the new network
+                    stop_access_point()
+                    time.sleep(2)
+
+                    if connect_to_wifi(received_ssid, received_password):
+                        print("Successfully connected!")
+                        print("WiFi provisioning complete.")
+                        sys.exit(0)
+                    else:
+                        print("Failed to connect. Restarting captive portal...")
+                        received_ssid = None
+                        received_password = None
+                        credentials_received.clear()
+                        start_access_point()
                 else:
-                    print("Internet connection lost during monitoring. Will attempt to start AP mode.")
-                    internet_is_up = False
-                    # Fall through to AP mode logic below (as internet_is_up is now False)
-            
-            # If internet_is_up is False (either from startup, or lost during monitoring)
-            print("No internet connection. Preparing to start AP mode...")
-            _credentials_event.clear()
-            _credentials_store.clear()
-            ap_started_successfully = False
-            dnsmasq_started_successfully = False
-
-            if start_access_point_manual_ip(current_wifi_iface): # Try to start AP
-                ap_started_successfully = True
-                if start_manual_dnsmasq(current_wifi_iface): # Try to start DNS/DHCP
-                    dnsmasq_started_successfully = True
-                    # Add iptables rule AFTER AP and dnsmasq are up
-                    iptables_cmd_delete = ["sudo", "iptables", "-t", "nat", "-D", "PREROUTING", "-i", current_wifi_iface, "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", f"{AP_IP_ADDRESS}:{FLASK_PORT}"]
-                    iptables_cmd_add = ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", current_wifi_iface, "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", f"{AP_IP_ADDRESS}:{FLASK_PORT}"]
-                    run_command(iptables_cmd_delete, check=False)
-                    run_command(iptables_cmd_add)
-                    print(f"Added iptables rule: redirect port 80 on {current_wifi_iface} to {AP_IP_ADDRESS}:{FLASK_PORT}")
-
-                    print(f"AP '{AP_SSID}' and manual dnsmasq started. Waiting for client...")
-                    
-                    flask_server_thread = threading.Thread(
-                        target=run_flask_app_threaded,
-                        args=(AP_IP_ADDRESS, FLASK_PORT),
-                        daemon=True
-                    )
-                    flask_server_thread.start()
-                    print(f"Captive portal web server running. Access at http://{AP_IP_ADDRESS}:{FLASK_PORT}")
-
-                    credentials_received = _credentials_event.wait(timeout=600)
-
-                    # Before stopping dnsmasq, if it's still running, let's try to grab recent stderr if any
-                    if dnsmasq_process and dnsmasq_process.poll() is None:
-                        # This is hard to do reliably without async I/O or threads for Popen's streams.
-                        # The -d output is best viewed by running dnsmasq manually if issues persist.
-                        pass
-
-                    # Teardown AP components regardless of how we exited the wait/connection attempt
-                    stop_manual_dnsmasq() # Stop dnsmasq first
-                    stop_access_point(current_wifi_iface) # Then stop AP
-
-                    if credentials_received and _credentials_store.get('ssid'):
-                        print("Credentials received.")
-                        target_ssid = _credentials_store['ssid']
-                        target_password = _credentials_store['password']
-                        time.sleep(3) # Brief pause before attempting connection
-                        if connect_to_target_wifi(current_wifi_iface, target_ssid, target_password):
-                            print("Successfully connected to the new WiFi network!")
-                            # Internet is confirmed at this point by connect_to_target_wifi
-                            run_command(["sudo", "systemctl", "stop", "wificonnect.service"], check=False)
-                            sys.exit(0)
-                        else:
-                            print("Failed to connect to the new WiFi with immediate internet verification. "
-                                  "The profile is saved. AP mode will restart after checks.")
-                            internet_is_up = False # Ensure state before POST AP MODE CHECK
-                            # Fall through to POST AP MODE CHECK
-                    else:
-                        if not credentials_received: print("Timed out waiting for credentials.")
-                        else: print("Credentials event set, but no credentials found (or SSID missing).")
-
-                        # --- FALLBACK WiFi ATTEMPT ---
-                        print("\nNo credentials received from captive portal. Attempting fallback WiFi connection...")
-                        if attempt_fallback_connection(current_wifi_iface):
-                            print("Fallback WiFi connection successful! Stopping wificonnect service.")
-                            run_command(["sudo", "systemctl", "stop", "wificonnect.service"], check=False)
-                            sys.exit(0)
-                        else:
-                            print("Fallback connection failed. Will restart captive portal.")
-                        # --- END FALLBACK WiFi ATTEMPT ---
-
-                        internet_is_up = False # Ensure state before POST AP MODE CHECK
-                        # Fall through to POST AP MODE CHECK
-
-                    # --- POST AP MODE CHECK ---
-                    # AP mode has ended (either by creds processing which failed, or timeout).
-                    # Give NetworkManager a chance to reconnect to a known network.
-                    print("AP mode ended. Checking for auto-reconnection to known networks for up to 30 seconds...")
-                    reconnection_wait_total = 60  # seconds
-                    reconnection_wait_interval = 10 # seconds
-                    reconnected_externally = False # Initialize for this check cycle
-                    for i in range(reconnection_wait_total // reconnection_wait_interval):
-                        print(f"POST AP MODE: Auto-reconnection check ({i+1}/{reconnection_wait_total // reconnection_wait_interval})...")
-                        
-                        # Add a small initial delay before the first check in this loop,
-                        # on top of delays in stop_access_point()
-                        if i == 0:
-                            print("POST AP MODE: Giving NetworkManager a few seconds to establish connection after AP teardown...")
-                            time.sleep(5) # Initial grace for NM to connect
-
-                        if check_internet_connection(current_wifi_iface):
-                            print("POST AP MODE: Successfully reconnected to a known network with internet.")
-                            reconnected_externally = True
-                            break
-                        else: # Internet check failed
-                            print(f"POST AP MODE: Internet check failed on attempt {i+1}. Logging network state...")
-                            log_network_diagnostics(current_wifi_iface)
-
-                        if i < (reconnection_wait_total // reconnection_wait_interval) - 1: # Don't sleep after last check
-                             time.sleep(reconnection_wait_interval)
-                    
-                    if reconnected_externally:
-                        # Loop will restart, primary check_internet_connection at the top will pass.
-                        print("POST AP MODE: Successfully reconnected. Proceeding to monitor mode.")
-                        internet_is_up = True # Set state for next main loop iteration
-                        continue # Continue to the top of the main while loop
-                    else:
-                        print("POST AP MODE: Failed to auto-reconnect to a known network with internet after AP mode timeout.")
-                        print(f"Will retry AP mode after a delay of {RETRY_INTERVAL_AFTER_FAIL} seconds.")
-                        internet_is_up = False # Ensure state is correct
-                        time.sleep(RETRY_INTERVAL_AFTER_FAIL) 
-                        continue # Continue to the top of the main while loop (which will likely re-enter AP)
-
-                else: # Failed to start manual dnsmasq
-                    print("Failed to start manual dnsmasq. Stopping AP and retrying.")
-                    # Print any captured dnsmasq logs if it failed
-                    if DNSMASQ_LOG_LINES:
-                        print("Recent dnsmasq log lines during failed start attempt:")
-                        for line in DNSMASQ_LOG_LINES: print(line)
-                    if ap_started_successfully: # Only stop AP if it was started
-                        stop_access_point(current_wifi_iface)
-                    internet_is_up = False
-                    time.sleep(RETRY_INTERVAL_AFTER_FAIL)
-                    continue # Continue to the top of the main while loop
-            else: # Failed to start AP (manual IP)
-                print("Failed to start AP (manual IP). Retrying after a delay...")
-                stop_access_point(current_wifi_iface) # Attempt cleanup just in case
-                internet_is_up = False
-                time.sleep(RETRY_INTERVAL_AFTER_FAIL)
-                continue # Continue to the top of the main while loop
+                    # Credentials event set but no SSID - likely from checker thread
+                    if check_internet():
+                        print("Connected to network!")
+                        sys.exit(0)
+                    credentials_received.clear()
 
     except KeyboardInterrupt:
-        print("\nScript interrupted by user. Cleaning up...")
+        pass
     finally:
-        print("Performing final cleanup...")
-        stop_manual_dnsmasq()
-        stop_access_point(current_wifi_iface) # current_wifi_iface might be None if detection failed early
-        print("Cleanup complete. Exiting.")
+        print("\nCleaning up...")
+        shutdown_flag.set()
+        stop_access_point()
+        print("Done.")
 
 
 if __name__ == "__main__":
