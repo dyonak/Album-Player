@@ -1,130 +1,204 @@
-# NFC album player project
+# NFC Album Player
 
-## Products
+An NFC-based album player for Raspberry Pi that plays music through Sonos speakers or Bluetooth audio devices via Spotify.
 
--PN532 NFC Reader - tried a few, I haven't formed a strong preference on model
+## Features
 
--Raspberry Pi - I've run the project on bot a Pi 4 1gb and a Pi Zero 2, recommend using the zero 2 as it's got plenty of resources to cover the need here.
+- **NFC Tag Recognition**: Place an album with an NFC tag on the reader to start playback
+- **Automatic Registration**: First-time albums are registered by playing them on Sonos, then the NFC tag is linked
+- **Multiple Audio Outputs**: Play to Sonos speakers or Bluetooth audio devices
+- **Spotify Connect**: Uses spotifyd as a Spotify Connect receiver for Bluetooth playback
+- **Web Interface**: Manage albums, configure speakers, pair Bluetooth devices
+- **WiFi Provisioning**: Captive portal for easy WiFi setup on new devices
 
-## Steps to Setup
+## Supported Hardware
 
-Use Raspberry Pi Imager to setup Pi OS Lite 64
+- **Raspberry Pi**: Pi Zero 2 W, Pi 4, Pi 5 (both 32-bit and 64-bit OS)
+- **NFC Reader**: PN532 module connected via SPI
+- **Audio Output**: Sonos speakers (any model) or Bluetooth speakers/headphones
 
-Wire up nfc reader to pi with SPI
-http://wiki.sunfounder.cc/index.php?title=PN532_NFC_Module_for_Raspberry_Pi&ref=6doe1gqh2qgn
+## Quick Start
 
-sudo apt update/upgrade
+### 1. Prepare the Raspberry Pi
 
-raspi-config > Interfaces -> Enable SPI
+Use Raspberry Pi Imager to flash **Pi OS Lite 64-bit** (recommended) to your SD card.
 
-SPI section of the second link (SPI Communication Instructions for Raspberry Pi)
--Substitute the official libnfc from github instead of this - http://dl.bintray.com/nfc-tools/sources/libnfc-1.7.1.tar.bz2
+Configure in Imager settings:
+- Enable SSH
+- Set hostname (e.g., `albumplayer`)
+- Configure WiFi (optional - can use captive portal later)
 
-Install pip
+### 2. Wire the NFC Reader
 
-sudo apt install git
-mkdir albumplayer
-pull down github album-player project (git clone)
-python3 -m venv my_venv
-source ./my_venv/bin/activate
-pip install -r requirements.txt
+Connect the PN532 NFC module to the Pi via SPI:
 
-Test Registrar.py/Webapp.py
+| PN532 Pin | Pi GPIO Pin |
+|-----------|-------------|
+| VCC       | 3.3V (Pin 1) |
+| GND       | GND (Pin 6) |
+| SCK       | GPIO 11 / SCLK (Pin 23) |
+| MISO      | GPIO 9 / MISO (Pin 21) |
+| MOSI      | GPIO 10 / MOSI (Pin 19) |
+| SS/CS     | GPIO 8 / CE0 (Pin 24) |
 
-Install nfc module
-pip install nfcpy
-pip3 install adafruit-circuitpython-pn532
+Set the PN532 DIP switches to SPI mode.
 
-At this point the following should work
+### 3. Install Album Player
 
-```
-import board
-import busio
-from digitalio import DigitalInOut
-from adafruit_pn532.spi import PN532_SPI
+SSH into your Pi and run:
 
-# Create SPI connection
-spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
-cs_pin = DigitalInOut(board.D8)
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/Album-Player.git
+cd Album-Player
 
-# Create an instance of the PN532 class
-pn532 = PN532_SPI(spi, cs_pin, debug=False)
-ic, ver, rev, support = pn532.firmware_version
+# Run the installation script
+chmod +x install.sh
+./install.sh
 
-print('Found PN532 with firmware version: {0}.{1}'.format(ver, rev))
-# Configure PN532 to communicate with MiFare cards
-pn532.SAM_configuration()
-
-print("Waiting for RFID/NFC card...")
-while True:
-    # Check if a card is available to read
-    uid = pn532.read_passive_target(timeout=0.5)
-    print(".", end="")
-    # Try again if no card is available.
-    if uid is None:
-        continue
-    print("Found card with UID:", [hex(i) for i in uid])
+# Reboot (required for SPI and permissions)
+sudo reboot
 ```
 
-The above may have been dependent on another install from
-git clone https://github.com/hoanhan101/pn532.git
-and the corresponding 'make init' command listed there
--I'd try without it and do this as a last resort if needed
+The installer will:
+- Install all dependencies (Python, Bluetooth, spotifyd)
+- Set up systemd services
+- Enable SPI interface
+- Configure user permissions
 
-Setup code - pull down this repo, setup venv, pip install -r requirements.txt
-Run Webapp.py and check http://album:3029
--Important: On the config tab set the player name for the sonos speaker you want to play albums to. This speaker is also used to play audio files that contain registration instructions.
-Run AlbumPlayer.py and scan cards, go through the registration process
+### 4. Configure the Player
 
-Copy albumweb and albumplayer service files to /etc/system/systemd/
--sudo systemctl enable name.service for each of them
--sudo systemctl daemon-reload
+After reboot, access the web interface at `http://albumplayer.local:3029`
 
-Ref:
-https://blog.stigok.com/2017/10/12/setting-up-a-pn532-nfc-module-on-a-raspberry-pi-using-i2c.html
-http://wiki.sunfounder.cc/index.php?title=PN532_NFC_Module_for_Raspberry_Pi&ref=6doe1gqh2qgn
+1. **Config Tab**: Select your Sonos speaker for playback and registration prompts
+2. **Bluetooth Tab**: Pair Bluetooth speakers for portable use
+3. **Spotify Tab**: Connect your Spotify account (Premium required for playback control)
 
-## Docker setup
+### 5. Register Albums
 
-Install 64 bit lite os
+1. Place an NFC-tagged album on the reader
+2. You'll hear a voice prompt on your Sonos speaker
+3. Open the Sonos app and play the album you want to register
+4. Wait 10 seconds - the album is now linked to that NFC tag
+5. Remove and replace the album to start playback anytime
 
-sudo apt update
+## Architecture
 
-sudo apt upgrade
-
-sudo rasip-config > Interfaces > Enable SPI
-
-curl -fsSL https://get.docker.com -o get-docker.sh
-
-chmod +x get-docker.sh
-
-sudo sh ./get-docker.sh
-
-sudo usermod -aG docker [user_name]
-
-exit and reconnect to ssh (needs to be done to re-validate your user's groups)
+All services run natively on the Pi (no Docker):
 
 ```
-docker run -d --restart always --privileged --net=host dyonak/albumplayer:latest
+┌─────────────────────────────────────────────────────────────┐
+│                    Raspberry Pi                              │
+├─────────────────────────────────────────────────────────────┤
+│  albumplayer.service   │  Main NFC reader + playback logic  │
+│  webapp.service        │  Web UI (Flask) on port 3029       │
+│  spotifyd.service      │  Spotify Connect receiver          │
+│  wificonnect.service   │  WiFi captive portal (if needed)   │
+└─────────────────────────────────────────────────────────────┘
+         │                        │                    │
+         ▼                        ▼                    ▼
+    ┌─────────┐            ┌───────────┐        ┌──────────┐
+    │ PN532   │            │   Sonos   │        │ Bluetooth│
+    │ NFC     │            │  Speaker  │        │  Speaker │
+    └─────────┘            └───────────┘        └──────────┘
 ```
 
-NOTE: docker needs to be changed to run with local storage for the DB
-#/home/album/album_db
-#docker run -d -v /home/${USER}/album_db:/app/db --privileged --net=host dyonak/albumplayer:latest
+## Services
 
-- Verify this by going to hostname.local:3029 in a browser on the same network
-- You should also see NFC cards getting read in the output if you put one near the reader
+| Service | Description | Port |
+|---------|-------------|------|
+| `albumplayer` | NFC reader and playback orchestration | - |
+| `webapp` | Web interface for configuration | 3029 |
+| `spotifyd` | Spotify Connect receiver for Bluetooth output | 4381 (zeroconf) |
+| `wificonnect` | Captive portal for WiFi provisioning | 80 (when active) |
 
-## Usage
+### Managing Services
 
-All of this is assuming you've built some type of device that allows for an album with an NFC sticker tag, or other similar object with a NFC tag, to be placed so that it can be read by the NFC reader that you've configured.
+```bash
+# View service status
+sudo systemctl status albumplayer
+sudo systemctl status webapp
+sudo systemctl status spotifyd
 
-- Tag the album with the nfc tag (I like to place my tags about 1" inside the album cover, up 1" from the bottom of the album sleeve)
-- Place the album on the "player" so the tag lines up with the reader
-- You'll be prompted on the configured speaker to play the album on your configured speaker
-- Open Sonos and play that album on the configured speaker
-- The registration will poll several times ensuring that an album has been playing for over 10 seconds, if so it add this album to the database
-- After registration the album begins playing
-- You can remove the album at any time to stop playback
+# View logs
+journalctl -u albumplayer -f
+journalctl -u webapp -f
+journalctl -u spotifyd -f
 
-Once registered anytime you place that album back on the device it will begin to play.
+# Restart a service
+sudo systemctl restart albumplayer
+```
+
+## Development
+
+For development workflow, see [dev_tools/DEV-WORKFLOW.md](dev_tools/DEV-WORKFLOW.md).
+
+Quick deploy from your dev machine:
+```bash
+./dev_tools/deploy-to-pi.sh
+```
+
+## Configuration Files
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `spotifyd.conf` | `~/.config/spotifyd/spotifyd.conf` | Spotify Connect settings |
+| `albums.db` | `~/album_db/albums.db` | SQLite database of registered albums |
+
+## Troubleshooting
+
+### NFC reader not detected
+```bash
+# Check SPI is enabled
+ls /dev/spidev*
+# Should show /dev/spidev0.0 and /dev/spidev0.1
+
+# If not, enable SPI:
+sudo raspi-config
+# Interface Options → SPI → Enable
+sudo reboot
+```
+
+### spotifyd not showing as Spotify device
+```bash
+# Check spotifyd is running
+sudo systemctl status spotifyd
+journalctl -u spotifyd -f
+
+# Ensure your Spotify account is connected in the web UI
+# Try opening Spotify app on phone and look for "Album Player" device
+```
+
+### Bluetooth speaker not connecting
+```bash
+# Check Bluetooth is on
+bluetoothctl power on
+bluetoothctl scan on
+
+# Pair manually if needed
+bluetoothctl pair XX:XX:XX:XX:XX:XX
+bluetoothctl connect XX:XX:XX:XX:XX:XX
+```
+
+### Album plays to wrong output
+- If Bluetooth speaker is connected, it takes priority
+- Disconnect Bluetooth to play to Sonos
+- Or use the web UI to manage Bluetooth connections
+
+## Hardware Build Tips
+
+- Place NFC tags about 1" inside album covers, 1" from the bottom
+- Position the PN532 reader where tags will naturally align
+- Consider a 3D-printed enclosure for a clean look
+- Use quality NFC tags (NTAG213 or NTAG215 work well)
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Acknowledgments
+
+- [spotifyd](https://github.com/Spotifyd/spotifyd) - Spotify Connect daemon
+- [SoCo](https://github.com/SoCo/SoCo) - Sonos control library
+- [spotipy](https://github.com/spotipy-dev/spotipy) - Spotify Web API wrapper
+- [nfcpy](https://github.com/nfcpy/nfcpy) - NFC library for Python

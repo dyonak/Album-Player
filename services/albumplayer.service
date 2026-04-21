@@ -1,11 +1,16 @@
 [Unit]
-Description=Album Player App
-After=network.target
+Description=Album Player NFC Service
+After=network-online.target bluetooth.target
+Wants=network-online.target
 
 [Service]
-WorkingDirectory=/home/dyonak/Album-Player-Standalone
-ExecStart=/home/dyonak/Album-Player-Standalone/myvenv/bin/python3 AlbumPlayer.py
+Type=simple
+User=dyonak
+WorkingDirectory=/home/dyonak/album-player
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /home/dyonak/album-player/AlbumPlayer.py
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

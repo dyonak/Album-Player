@@ -1,59 +1,93 @@
 from soco import SoCo, discover
-from soco.music_services import MusicService
 from soco.plugins.sharelink import ShareLinkPlugin
+from AudioController import AudioController
 import DBConnector
 from time import sleep
-import json
+from typing import Optional, Dict, Any
 import config
 
-class SonosController:
+
+class SonosController(AudioController):
+    """Audio controller for Sonos speakers."""
+
     def __init__(self):
-        self.player = None
+        self.player: Optional[SoCo] = None
         self.config = config.Config()
         self.current_track = None
-        self.state = None
+        self.state: Optional[str] = None
+        self._discover_player()
         self.get_state()
+
+    def _discover_player(self) -> None:
+        """Find and connect to the configured Sonos player."""
         players = discover()
-        self.player = None
-        for p in players:
-            if p.player_name == self.config.player:
-                self.player = p
-                break
+        if players:
+            for p in players:
+                if p.player_name == self.config.player:
+                    self.player = p
+                    print(f"Connected to Sonos player: {self.config.player}")
+                    break
+        if not self.player:
+            print(f"Warning: Sonos player '{self.config.player}' not found")
 
-    def clear_queue(self):
-        self.player.clear_queue()
+    def is_connected(self) -> bool:
+        """Check if connected to a Sonos player."""
+        return self.player is not None
 
-    def play(self):
-        self.player.play()
-        self.get_state()
+    def clear_queue(self) -> None:
+        """Clear the Sonos queue."""
+        if self.player:
+            self.player.clear_queue()
 
-    def pause(self):
-        try:
-          self.player.pause()
-          self.get_state()
-        except:
-          return
-
-    def stop(self):
-        try:
-            self.player.stop()
+    def play(self) -> None:
+        """Resume playback."""
+        if self.player:
+            self.player.play()
             self.get_state()
+
+    def pause(self) -> None:
+        """Pause playback."""
+        try:
+            if self.player:
+                self.player.pause()
+                self.get_state()
         except:
             return
 
-    def next(self):
-        self.player.next()
+    def stop(self) -> None:
+        """Stop playback."""
+        try:
+            if self.player:
+                self.player.stop()
+                self.get_state()
+        except:
+            return
 
-    def previous(self):
-        self.player.previous()
+    def next(self) -> None:
+        """Skip to next track."""
+        if self.player:
+            self.player.next()
 
-    def volume(self, volume):
-        self.player.volume = volume
-    
-    def now_playing(self):
-        return self.player.get_current_track_info()
+    def previous(self) -> None:
+        """Go to previous track."""
+        if self.player:
+            self.player.previous()
 
-    def play_mp3(self, link):
+    def volume(self, level: int) -> None:
+        """Set volume level (0-100)."""
+        if self.player:
+            self.player.volume = level
+
+    def now_playing(self) -> Dict[str, Any]:
+        """Get information about the currently playing track."""
+        if self.player:
+            return self.player.get_current_track_info()
+        return {}
+
+    def play_mp3(self, link: str) -> None:
+        """Play an MP3 file from a URL."""
+        if not self.player:
+            return
         self.config.reload()
         self.pause()
         sleep(0.2)
@@ -63,8 +97,11 @@ class SonosController:
         sleep(0.2)
         self.player.play_uri(link)
 
-    def get_state(self):
+    def get_state(self) -> Optional[str]:
+        """Get the current playback state."""
         try:
+            if not self.player:
+                return None
             transport_info = self.player.get_current_transport_info()
             self.state = transport_info.get('current_transport_state')
 
@@ -78,15 +115,20 @@ class SonosController:
                 print(f"{self.config.player} is transitioning between states.")
             else:
                 print(f"Unknown state: {self.state}")
-            
-            return transport_info
 
+            return self.state
         except:
             return None
 
-    def play_album(self, uri):
-        print(self.now_playing()['uri'])
-        print(uri)
+    def play_album(self, uri: str) -> None:
+        """Play an album from its Spotify URI."""
+        if not self.player:
+            print("No Sonos player connected")
+            return
+
+        print(f"Current: {self.now_playing().get('uri', 'None')}")
+        print(f"Requested: {uri}")
+
         self.config.reload()
         self.pause()
         sleep(0.2)
@@ -96,28 +138,18 @@ class SonosController:
         sleep(0.2)
         self.volume(self.config.volume)
         sleep(0.2)
+
         sharelink = ShareLinkPlugin(self.player)
         sharelink.add_share_link_to_queue(uri)
         sleep(0.2)
         self.player.play_from_queue(0)
+
         DBConnector.update_play_count(uri)
         self.get_state()
 
+
 if __name__ == "__main__":
-  sc = SonosController()
-  sc.get_state()
-  print(sc.state)
-  print(sc.now_playing())
-
-
-
-#   yt_uri = "https://music.youtube.com/watch?v=q-KE9lvU810&list=OLAK5uy_kLGJbuEFbwQEYzzxq95bT4EFusZKiGvMg"
-#   sc.player.play_uri(yt_uri)
-#   sleep(5)
-#   sc.pause()
-
-#   album = sc.now_playing()["album"]
-#   print(sc.now_playing())
-
-  # service = MusicService(SERVICE)
-  # sc.clear_queue()
+    sc = SonosController()
+    sc.get_state()
+    print(sc.state)
+    print(sc.now_playing())

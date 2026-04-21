@@ -1,225 +1,173 @@
-# Spotify API Credentials Setup Guide
+# Spotify Credentials Setup
 
-This guide explains how to securely embed your Spotify API credentials into the Docker image using encryption.
+This guide explains how to configure your Spotify API credentials for Album Player.
 
 ## Overview
 
-The Album Player now supports encrypted Spotify credentials baked into the Docker image. This allows you to:
-- Distribute Docker images to friends without exposing credentials in plaintext
-- Avoid requiring users to create their own Spotify developer accounts
-- No need for config.json on the Pi (credentials are in the image)
+Album Player needs Spotify API credentials for:
+- Playing albums via the Spotify Web API
+- spotifyd (Spotify Connect receiver)
 
-**Security Note**: This is obfuscation, not true security. Anyone with root access to the Pi can extract these credentials. Only use this approach with trusted friends.
-
----
-
-## Setup Steps
-
-### 1. Get Spotify API Credentials
+## Step 1: Create Spotify App
 
 1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 2. Log in with your Spotify account
-3. Click "Create an App"
-4. Fill in the app name (e.g., "Album Player") and description
-5. Click "Create"
-6. Copy your **Client ID** and **Client Secret**
+3. Click "Create App"
+4. Fill in:
+   - App name: `Album Player`
+   - App description: `NFC Album Player`
+   - Redirect URI: `http://127.0.0.1:8888/callback`
+5. Check the agreement box and click "Save"
+6. Note your **Client ID** and **Client Secret**
 
-### 2. Encrypt Your Credentials
+## Step 2: Configure Album Player
 
-Run the encryption utility script:
+### Option A: Using the Web UI (Recommended)
+
+1. Access the web interface at `http://your-pi.local:3029`
+2. Go to the **Spotify** tab
+3. Click "Connect Spotify"
+4. Authorize with your Spotify account
+5. Copy the code from the redirect URL and paste it in the web UI
+
+### Option B: Using config.json
+
+Create or edit `~/.album-player/config.json` on your Pi:
+
+```json
+{
+    "spotify_client_id": "your_client_id_here",
+    "spotify_client_secret": "your_client_secret_here"
+}
+```
+
+### Option C: Using Environment Variables
+
+Set these in your shell or add to the service file:
 
 ```bash
-python3 dev_tools/encrypt_credentials.py
+export SPOTIFY_CLIENT_ID="your_client_id_here"
+export SPOTIFY_CLIENT_SECRET="your_client_secret_here"
+```
+
+To add to the albumplayer service:
+```bash
+sudo systemctl edit albumplayer
+```
+
+Add:
+```ini
+[Service]
+Environment=SPOTIFY_CLIENT_ID=your_client_id_here
+Environment=SPOTIFY_CLIENT_SECRET=your_client_secret_here
+```
+
+## Step 3: Configure spotifyd
+
+spotifyd needs Spotify credentials to appear as a Spotify Connect device.
+
+Edit `~/.config/spotifyd/spotifyd.conf`:
+
+```toml
+[global]
+device_name = "Album Player"
+backend = "alsa"
+device = "default"
+
+# Add your Spotify credentials
+username = "your_spotify_email"
+password = "your_spotify_password"
+```
+
+Or use a password command for better security:
+
+```bash
+# Create password file
+echo "your_spotify_password" > ~/.spotify_password
+chmod 600 ~/.spotify_password
+```
+
+Then in spotifyd.conf:
+```toml
+username = "your_spotify_email"
+password_cmd = "cat /home/your_user/.spotify_password"
+```
+
+Restart spotifyd:
+```bash
+sudo systemctl restart spotifyd
+```
+
+## Step 4: Verify Setup
+
+1. Check spotifyd is running:
+   ```bash
+   sudo systemctl status spotifyd
+   journalctl -u spotifyd -f
+   ```
+
+2. Open Spotify on your phone/computer
+3. Look for "Album Player" in the devices list
+4. Select it to verify connection
+
+## Encrypted Credentials (Advanced)
+
+For additional security, you can encrypt your Spotify API credentials.
+
+Run the encryption tool:
+```bash
+cd Album-Player/dev_tools
+python3 encrypt_credentials.py
 ```
 
 This will:
-- Generate an encryption key (saved to `.encryption_key` - keep this secret!)
-- Prompt you to enter your Spotify Client ID and Secret
-- Output encrypted values to paste into the Dockerfile
+1. Prompt for your Client ID and Client Secret
+2. Generate an encryption key
+3. Output encrypted values
 
-Example output:
-```
-Add these to your Dockerfile as ENV variables:
-
-ENV ENCRYPTION_KEY=k8s9d...
-ENV ENCRYPTED_SPOTIFY_ID="gAAAAABh..."
-ENV ENCRYPTED_SPOTIFY_SECRET="gAAAAABh..."
-```
-
-### 3. Update the Dockerfile
-
-Open `Dockerfile` and replace the placeholder values (lines 32-34):
-
-**Before:**
-```dockerfile
-ENV ENCRYPTION_KEY="REPLACE_WITH_YOUR_ENCRYPTION_KEY"
-ENV ENCRYPTED_SPOTIFY_ID="REPLACE_WITH_ENCRYPTED_ID"
-ENV ENCRYPTED_SPOTIFY_SECRET="REPLACE_WITH_ENCRYPTED_SECRET"
-```
-
-**After (using your generated values):**
-```dockerfile
-ENV ENCRYPTION_KEY="k8s9d..."
-ENV ENCRYPTED_SPOTIFY_ID="gAAAAABh..."
-ENV ENCRYPTED_SPOTIFY_SECRET="gAAAAABh..."
-```
-
-### 4. Build and Push Docker Image
-
+Store the encryption key securely and set as environment variable:
 ```bash
-./dev_tools/build-and-push.sh
+export ENCRYPTION_KEY="your_generated_key"
+export ENCRYPTED_SPOTIFY_ID="encrypted_value"
+export ENCRYPTED_SPOTIFY_SECRET="encrypted_value"
 ```
 
-This builds the image with your encrypted credentials and pushes it to Docker Hub.
+**Security Note**: This is obfuscation, not true security. Anyone with root access to the Pi can extract these credentials.
 
-### 5. Deploy to Friends' Raspberry Pis
+## Credential Priority
 
-Your friends can now pull and run the image:
-
-```bash
-docker pull dyonak/albumplayer:latest
-docker compose up -d
-```
-
-The credentials will be automatically decrypted when the container starts!
-
----
-
-## How It Works
-
-### Runtime Decryption Flow
-
-1. Container starts → `AlbumPlayer.py` runs
-2. `Registrar.__init__()` is called
-3. Checks for environment variables: `ENCRYPTION_KEY`, `ENCRYPTED_SPOTIFY_ID`, `ENCRYPTED_SPOTIFY_SECRET`
-4. If found, decrypts credentials using the Fernet cipher
-5. Uses decrypted credentials to authenticate with Spotify API
-6. If env vars not found, falls back to `config.json` (for local development)
-
-### File Priority
-
-```
-1. Encrypted environment variables (production)
-   ↓ (if not found)
-2. config.json (local development)
-   ↓ (if not found)
-3. Error: No credentials available
-```
-
----
-
-## Security Considerations
-
-### What This Protects Against
-- ✅ Casual users viewing credentials in plaintext
-- ✅ Credentials accidentally committed to git
-- ✅ Easy extraction via `docker inspect` or config files
-
-### What This DOES NOT Protect Against
-- ❌ Determined users with root access to the Pi
-- ❌ Users who inspect running Python processes
-- ❌ Users who modify the container to log credentials
-
-### Important Security Notes
-
-1. **Anyone with root on the Pi can extract credentials**
-   - They can read environment variables from the running process
-   - They can modify the Python code to print credentials
-   - They can attach a debugger to the running process
-
-2. **The encryption key is in the image**
-   - Both the encrypted data AND the key are in the same place
-   - This is security through obscurity, not true encryption
-
-3. **Only share with trusted friends**
-   - Assume anyone running your image can get the credentials
-   - Monitor Spotify API usage for abuse
-   - Spotify may have rate limits/quotas
-
-4. **Check Spotify's Terms of Service**
-   - Spotify may prohibit embedding credentials in distributed apps
-   - You may be required to use OAuth for end-users
-   - This approach is best for personal/small group use
-
----
-
-## Development Workflow
-
-### Local Development (without encryption)
-
-Create a `config.json` file for local testing:
-
-```bash
-cp example-config.json config.json
-# Edit config.json with your credentials
-```
-
-The code will automatically fall back to `config.json` if env vars aren't set.
-
-### Testing Encrypted Credentials Locally
-
-You can test the encryption flow without Docker:
-
-```bash
-# Encrypt credentials
-python3 dev_tools/encrypt_credentials.py
-
-# Export to environment
-export ENCRYPTION_KEY="your-key"
-export ENCRYPTED_SPOTIFY_ID="your-encrypted-id"
-export ENCRYPTED_SPOTIFY_SECRET="your-encrypted-secret"
-
-# Test
-python3 Registrar.py
-```
-
----
+The code checks for credentials in this order:
+1. Encrypted environment variables (if `ENCRYPTION_KEY` is set)
+2. Plain environment variables (`SPOTIFY_CLIENT_ID`, etc.)
+3. `config.json` file
 
 ## Troubleshooting
 
-### "Spotify credentials not found" Error
+### "Album Player" not showing in Spotify devices
 
-**Cause**: Neither env vars nor config.json are available
+1. Check spotifyd is running: `sudo systemctl status spotifyd`
+2. Check spotifyd logs: `journalctl -u spotifyd -f`
+3. Verify credentials in spotifyd.conf
+4. Ensure Pi is on the same network as your Spotify app
 
-**Solution**:
-1. For production: Ensure Dockerfile has the encrypted values
-2. For development: Create a `config.json` file
+### "Premium required" error
 
-### "Failed to decrypt credentials" Error
+Spotify Web API playback control requires a Spotify Premium account.
 
-**Cause**: Encryption key or encrypted values are incorrect
+### OAuth redirect errors
 
-**Solution**:
-1. Re-run `python3 dev_tools/encrypt_credentials.py`
-2. Ensure you copied ALL of the output (including quotes)
-3. Check for whitespace issues in the Dockerfile
+Ensure your redirect URI exactly matches what's configured in the Spotify Developer Dashboard:
+`http://127.0.0.1:8888/callback`
 
-### Credentials Work Locally But Not in Container
+### Credentials not loading
 
-**Cause**: config.json exists locally but isn't in the Docker image
-
-**Solution**:
-1. Use the encryption method (recommended)
-2. Or: Create a volume mount for config.json (less secure)
-
----
-
-## Alternative: Config File Method (Not Recommended)
-
-If you prefer NOT to use encryption, you can mount config.json as a volume:
-
-**docker-compose.yml:**
-```yaml
-volumes:
-  - ./config.json:/app/config.json  # Add this line
+Check file permissions:
+```bash
+ls -la ~/.album-player/config.json
+# Should be readable by your user
 ```
-
-Then create `config.json` on each Pi. This is less convenient but simpler.
-
----
 
 ## Questions?
 
-- Encryption not working? Check the console logs when the container starts
-- Want to rotate credentials? Re-run the encryption script and rebuild the image
+- Need to rotate credentials? Update `config.json` or environment variables and restart services
 - Need to revoke access? Change your Spotify API credentials in the developer dashboard

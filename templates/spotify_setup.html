@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h2><i class="bi bi-spotify"></i> Spotify Setup</h2>
+        <p class="text-muted">Connect Spotify for Bluetooth speaker playback</p>
+    </div>
+</div>
+
+{% if not available %}
+<!-- SpotifyClient Not Available -->
+<div class="row mb-4">
+    <div class="col">
+        <div class="alert alert-warning">
+            <h5><i class="bi bi-exclamation-triangle"></i> Spotify Client Not Available</h5>
+            <p class="mb-0">
+                SpotifyClient module is not available. This is needed for Bluetooth speaker playback.
+            </p>
+        </div>
+    </div>
+</div>
+{% else %}
+
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <i class="bi bi-x-circle"></i> {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if success %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle"></i> {{ success }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<!-- Status Card -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <strong>Status</strong>
+            </div>
+            <div class="card-body">
+                <p>
+                    <strong>Spotify API:</strong>
+                    {% if authenticated %}
+                    <span class="badge bg-success">Connected</span>
+                    {% else %}
+                    <span class="badge bg-warning">Not Connected</span>
+                    {% endif %}
+                </p>
+
+                {% if not authenticated %}
+                <hr>
+                <h6>Setup Instructions</h6>
+                <ol class="small">
+                    <li>Click the "Connect Spotify" button below</li>
+                    <li>Log in to your Spotify account and authorize</li>
+                    <li>You'll be redirected to a localhost URL (this is expected)</li>
+                    <li>Copy the <code>code</code> parameter from the URL</li>
+                    <li>Paste it in the box below</li>
+                </ol>
+                <p class="small text-muted">
+                    <strong>Example:</strong> If redirected to <code>http://127.0.0.1:8888/callback?code=AQB...xyz</code>,
+                    copy everything after <code>code=</code>
+                </p>
+                <p class="small text-muted">
+                    <strong>Note:</strong> Spotify Premium is required for playback control.
+                </p>
+
+                {% if auth_url %}
+                <a href="{{ auth_url }}" class="btn btn-success" target="_blank">
+                    <i class="bi bi-spotify"></i> Connect Spotify
+                </a>
+                {% endif %}
+
+                <hr>
+                <h6>Enter Authorization Code</h6>
+                <p class="small text-muted">
+                    Paste the <code>code</code> from the redirect URL here:
+                </p>
+                <div class="input-group mb-3">
+                    <input type="text" class="form-control" id="auth-code" placeholder="AQB...xyz">
+                    <button class="btn btn-outline-primary" type="button" onclick="submitAuthCode()">Submit</button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if authenticated %}
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <strong>Spotify Connect Devices</strong>
+            </div>
+            <div class="card-body">
+                {% if devices %}
+                <ul class="list-group list-group-flush">
+                    {% for device in devices %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>{{ device.name }}</strong>
+                            <br>
+                            <small class="text-muted">{{ device.type }}</small>
+                        </div>
+                        {% if device.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted mb-0">
+                    No devices found. Make sure spotifyd is running on the Pi.
+                </p>
+                {% endif %}
+
+                <hr>
+                <button class="btn btn-outline-secondary btn-sm" onclick="refreshDevices()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh Devices
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- How It Works -->
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <strong>How Bluetooth Playback Works</strong>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <h6>1. Connect Bluetooth</h6>
+                        <p class="small text-muted">
+                            Pair your Bluetooth speaker using the <a href="/bluetooth">Bluetooth page</a>.
+                        </p>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>2. Connect Spotify</h6>
+                        <p class="small text-muted">
+                            Authorize Spotify on this page to allow playback control.
+                        </p>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>3. Play Music</h6>
+                        <p class="small text-muted">
+                            Scan an NFC tag - if Bluetooth is connected, music plays on your speaker!
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function submitAuthCode() {
+        const code = document.getElementById('auth-code').value.trim();
+        if (!code) {
+            alert('Please enter an authorization code');
+            return;
+        }
+
+        fetch('/spotify/auth', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({code: code})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                location.reload();
+            } else {
+                alert('Authorization failed: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            alert('Error: ' + error);
+        });
+    }
+
+    function refreshDevices() {
+        location.reload();
+    }
+</script>
+{% endblock %}

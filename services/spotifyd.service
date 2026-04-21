@@ -1,0 +1,21 @@
+[Unit]
+Description=Spotifyd - Spotify Connect daemon
+After=network-online.target sound.target bluetooth.target dbus.service
+Wants=network-online.target sound.target
+Requires=dbus.service
+
+[Service]
+Type=simple
+User=dyonak
+
+# D-Bus and PulseAudio environment for headless operation
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_RUNTIME_PATH=/run/user/1000/pulse
+
+ExecStart=/usr/local/bin/spotifyd --no-daemon --config-path /home/dyonak/.config/spotifyd/spotifyd.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

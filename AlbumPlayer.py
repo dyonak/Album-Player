@@ -1,9 +1,6 @@
-#TODO:
-# Remove Add Album from web
-# Remove non-user relevant config items from web (spotify id/secret)
-# Expirement with balega os wifi connect, can this also prompt for a sonos speaker name I can connect to?
-# Build a docker image for the config/dependencies/python/wifi connect - ideal state I think?
-# Add tracks to the db? Could be good for tracking purposes - which tracks are getting skipped, when albums are removed from player, track play counting
+# TODO:
+# - Add tracks to the db for tracking (skipped tracks, play counting)
+# - Improve WiFi provisioning integration
 #
 #Structure:
 #   -NFCPoller.py - Handles NFC polling and tag detection
@@ -17,8 +14,7 @@ from time import sleep, time
 import requests
 from NFCPoller import NFCPoller
 from Registrar import Registrar
-from SonosController import SonosController
-import Webapp
+from PlaybackManager import PlaybackManager
 import json
 import socket
 import config
@@ -29,7 +25,7 @@ config = config.Config()
 if __name__ == "__main__":
 
     nfc = NFCPoller()
-    sc = SonosController()
+    pm = PlaybackManager()  # Manages Sonos and Bluetooth output selection
     reg = Registrar()
 
     # Grace period tracking for tag removal
@@ -53,7 +49,7 @@ if __name__ == "__main__":
                 elapsed_time = time() - tag_absent_start_time
                 if elapsed_time >= GRACE_PERIOD_SECONDS:
                     print(f"Grace period elapsed ({elapsed_time:.1f}s), stopping!")
-                    sc.pause()
+                    pm.pause()
                     last_playing_tag = None  # Clear the playing tag
                     tag_absent_start_time = None  # Reset for next time
                 else:
@@ -77,14 +73,14 @@ if __name__ == "__main__":
         result = reg.lookup_tag(nfc.tag)
 
         if result != None:
-            sc.play_album(result[4])
+            pm.play_album(result[4])
             last_playing_tag = nfc.tag  # Remember this tag is now playing
         else:
-            sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/detected.mp3")
+            pm.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/detected.mp3")
             album = None
             playing = []
             while not album:
-                playing.append(sc.now_playing())
+                playing.append(pm.now_playing())
                 #Scan currently playing, capture a snapshot when it's playing
                 #Wait a few seconds and capture another snapshot
                 #If it's the same track and it's been playing consistently add this album
@@ -93,7 +89,7 @@ if __name__ == "__main__":
                     #Album has been playing for over 10 seconds, this seems intentional
                     album = reg.lookup_album(playing[-1]['artist'] + " " + playing[-1]['album'])
                     reg.add_album_to_db(album, nfc.tag)
-                    sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/registered.mp3")
+                    pm.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/registered.mp3")
 
                     #Pause long enough for the registered message to play
                     sleep(5.0)
@@ -101,9 +97,9 @@ if __name__ == "__main__":
                     print("Album registered: " + album['artist'] + " " + album['album_name'])
                     result = reg.lookup_tag(nfc.tag)
                     if result != None:
-                        sc.play_album(result[4])
+                        pm.play_album(result[4])
                         last_playing_tag = nfc.tag  # Remember this tag is now playing
 
                 if len(playing) > 30: #We've been waiting over 1.5 minutes, let the user know the registration process has timed out
-                    sc.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/timeout.mp3")
+                    pm.play_mp3(f"http://{HOSTNAME}:{config.port}/audio/timeout.mp3")
                     break

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
 Utility script to encrypt Spotify API credentials.
-Run this locally to generate encrypted credentials for the Docker image.
 
 Usage:
     python3 encrypt_credentials.py
 
 This will prompt for your credentials and output encrypted values
-to paste into your Dockerfile.
+to set as environment variables.
 """
 
 from cryptography.fernet import Fernet
@@ -66,7 +65,7 @@ def main():
     print("✓ Encryption Complete!")
     print("=" * 60)
     print()
-    print("Add these to your Dockerfile as ENV variables:")
+    print("Set these as environment variables (e.g., in ~/.bashrc or service file):")
     print()
     print(f"ENV ENCRYPTION_KEY={key.decode()}")
     print(f'ENV ENCRYPTED_SPOTIFY_ID="{encrypted_id}"')

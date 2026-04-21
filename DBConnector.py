@@ -5,11 +5,25 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-db_name = "./db/albums.db"
+# Database path - use environment variable or default to ~/album_db/albums.db
+def get_db_path():
+    if os.environ.get('DB_PATH'):
+        return os.environ.get('DB_PATH')
+
+    home = os.path.expanduser('~')
+    return os.path.join(home, 'album_db', 'albums.db')
+
+db_name = get_db_path()
+logging.info(f"Database path: {db_name}")
 
 def connect():
     """Establish a connection to the database."""
     try:
+        # Ensure the directory exists
+        db_dir = os.path.dirname(db_name)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+
         connection = sqlite3.connect(db_name)
         create_table(connection)
         return connection
@@ -27,7 +41,7 @@ def close():
             logging.error(f"Error closing database connection: {e}")
 
 def execute_query(query, params=()):
-    with sqlite3.connect('./db/albums.db') as conn:
+    with sqlite3.connect(db_name) as conn:
         cursor = conn.cursor()
         cursor.execute(query, params)
         conn.commit()

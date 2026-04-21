@@ -1,135 +1,119 @@
 # Album Player - Development Workflow Guide
-This guide explains how to quickly test code changes on your Raspberry Pi without rebuilding and pushing Docker images.
+
+This guide explains how to quickly test code changes on your Raspberry Pi during development.
 
 ## Overview
 
-Instead of the slow workflow:
-1. Make changes → 2. Build image → 3. Push to Docker Hub → 4. Pull on Pi → 5. Test
+The development workflow is simple:
+1. Make changes on your dev machine
+2. Run `./dev_tools/deploy-to-pi.sh`
+3. Test on the Pi
 
-You now use:
-1. Make changes → 2. Run `./deploy-to-pi.sh` → 3. Test (30 seconds!)
+Changes are synced via rsync and services are automatically restarted.
 
 ## Initial Setup (One-Time)
 
 ### 1. Set Up SSH Key Authentication
 
-First, make sure you can SSH to your Pi without a password:
+SSH keys allow password-less deployment:
 
 ```bash
-# If you haven't already set up SSH keys
-ssh-copy-id pi@raspberrypi.local
+# Generate SSH key if you don't have one
+ssh-keygen -t ed25519
 
-# Test it works
-ssh pi@raspberrypi.local exit
+# Copy your key to the Pi
+ssh-copy-id dyonak@fruit-loops.local
+
+# Test it works (should not ask for password)
+ssh dyonak@fruit-loops.local exit
 ```
 
-### 2. Copy Files to the Pi
+### 2. Install Album Player on the Pi
 
-On your Raspberry Pi, create the project directory:
+On your Raspberry Pi:
 
 ```bash
-ssh pi@raspberrypi.local
-mkdir -p ~/album-player
-cd ~/album-player
+# Clone the repository
+git clone https://github.com/yourusername/Album-Player.git
+cd Album-Player
+
+# Run installation
+chmod +x install.sh
+./install.sh
+
+# Reboot
+sudo reboot
 ```
 
-Copy the docker-compose.yml to the Pi:
+### 3. Verify Services Running
+
+After reboot:
 
 ```bash
-# From your dev machine
-scp docker-compose.yml pi@raspberrypi.local:~/album-player/
-```
-
-### 3. Initial Code Sync
-
-From your development machine, sync all code:
-
-```bash
-./deploy-to-pi.sh
-```
-
-### 4. Start the Container (on Pi)
-
-SSH to your Pi and start the container with volume mounts:
-
-```bash
-ssh pi@raspberrypi.local
-cd ~/album-player
-
-# Create database directory if it doesn't exist
-mkdir -p ~/album_db
-
-# Start the container
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
+# Check all services are running
+sudo systemctl status albumplayer
+sudo systemctl status webapp
+sudo systemctl status spotifyd
 ```
 
 ## Daily Development Workflow
 
 ### Making Code Changes
 
-1. **Edit your Python files locally** (on your dev machine)
-   - Use your favorite IDE/editor as normal
-   - Make changes to any `.py` files
+1. **Edit files on your dev machine** using your preferred editor/IDE
 
-2. **Deploy to Pi**
+2. **Deploy to Pi**:
    ```bash
-   ./deploy-to-pi.sh
+   ./dev_tools/deploy-to-pi.sh
    ```
 
-   This script will:
-   - Sync only changed files (fast!)
-   - Restart the Docker container
-   - Show you the status
+   This will:
+   - Sync all code files to the Pi
+   - Update configuration files
+   - Restart affected services
 
-3. **Check the logs**
+3. **Watch logs** to verify changes:
    ```bash
-   ssh pi@raspberrypi.local 'docker logs -f album-player'
-   ```
-
-   Or if you're already SSH'd into the Pi:
-   ```bash
-   docker-compose logs -f
+   # In a separate terminal, SSH to Pi and watch logs
+   ssh dyonak@fruit-loops.local
+   journalctl -u albumplayer -f
    ```
 
 4. **Test your changes**
    - Scan an NFC tag
-   - Check the web interface
-   - Verify behavior
+   - Use the web interface at http://fruit-loops.local:3029
+   - Check Bluetooth functionality
 
-### Customizing the Deploy Script
+### Customizing Deploy Settings
 
-You can customize the deployment with environment variables:
+Override defaults with environment variables:
 
 ```bash
-# Different hostname/IP
-PI_HOST=192.168.1.100 ./deploy-to-pi.sh
+# Different Pi hostname or IP
+PI_HOST=192.168.1.100 ./dev_tools/deploy-to-pi.sh
 
 # Different username
-PI_USER=albumplayer ./deploy-to-pi.sh
+PI_USER=pi ./dev_tools/deploy-to-pi.sh
 
-# Different directory
-PI_CODE_DIR=/opt/album-player ./deploy-to-pi.sh
+# Different target directory
+PI_CODE_DIR=/opt/album-player ./dev_tools/deploy-to-pi.sh
 
 # Combine them
-PI_HOST=192.168.1.100 PI_USER=admin ./deploy-to-pi.sh
+PI_HOST=192.168.1.100 PI_USER=pi ./dev_tools/deploy-to-pi.sh
 ```
 
-To make these permanent, edit the script or create a `.env` file:
+Create a `.env` file for persistent settings:
 
 ```bash
-# .env file (create in project root)
-export PI_HOST=192.168.1.100
-export PI_USER=pi
-export PI_CODE_DIR=/home/pi/album-player
-export CONTAINER_NAME=album-player
+# .env (in project root)
+export PI_HOST=fruit-loops.local
+export PI_USER=dyonak
+export PI_CODE_DIR=/home/dyonak/album-player
 ```
 
-Then source it before deploying:
+Then:
 ```bash
-source .env && ./deploy-to-pi.sh
+source .env && ./dev_tools/deploy-to-pi.sh
 ```
 
 ## Useful Commands
@@ -138,156 +122,150 @@ source .env && ./deploy-to-pi.sh
 
 ```bash
 # Quick deploy
-./deploy-to-pi.sh
+./dev_tools/deploy-to-pi.sh
 
-# Deploy and watch logs
-./deploy-to-pi.sh && ssh pi@raspberrypi.local 'docker logs -f album-player'
+# Deploy and immediately watch logs
+./dev_tools/deploy-to-pi.sh && ssh dyonak@fruit-loops.local 'journalctl -u albumplayer -f'
 
 # SSH to Pi
-ssh pi@raspberrypi.local
+ssh dyonak@fruit-loops.local
 ```
 
 ### On the Raspberry Pi
 
 ```bash
-# View logs
-docker-compose logs -f
+# View logs for each service
+journalctl -u albumplayer -f    # NFC + playback
+journalctl -u webapp -f         # Web interface
+journalctl -u spotifyd -f       # Spotify Connect
 
-# Restart container
-docker-compose restart
+# View recent logs (last 50 lines)
+journalctl -u albumplayer -n 50
 
-# Stop container
-docker-compose down
+# Restart a service
+sudo systemctl restart albumplayer
+sudo systemctl restart webapp
+sudo systemctl restart spotifyd
 
-# Start container
-docker-compose up -d
+# Check service status
+sudo systemctl status albumplayer
 
-# Check container status
-docker-compose ps
+# Stop a service (for manual testing)
+sudo systemctl stop albumplayer
+python3 ~/album-player/AlbumPlayer.py  # Run manually
 
-# Access container shell (for debugging)
-docker-compose exec album-player bash
-
-# View only recent logs
-docker-compose logs --tail=50 -f
-
-# Pull latest base image (when you update dependencies)
-docker-compose pull
-docker-compose up -d
-```
-
-## When to Rebuild the Docker Image
-
-You only need to rebuild and push the Docker image when you change:
-
-- **Python dependencies** (`requirements.txt`)
-- **System packages** (apt packages in Dockerfile)
-- **NFC library configuration** (`libnfc.conf`)
-- **The run.sh script** (though this can be volume-mounted too)
-
-For these changes:
-
-```bash
-# On your dev machine
-docker build -t dyonak/albumplayer:latest .
-docker push dyonak/albumplayer:latest
-
-# On the Pi
-cd ~/album-player
-docker-compose pull
-docker-compose up -d
+# Re-enable service
+sudo systemctl start albumplayer
 ```
 
 ## Troubleshooting
 
 ### "Permission denied" when running deploy script
+
 ```bash
-chmod +x deploy-to-pi.sh
+chmod +x dev_tools/deploy-to-pi.sh
 ```
 
-### "Container not found" after deploy
-The container isn't running. SSH to Pi and run:
+### "Cannot connect" error
+
+Check:
+1. Pi is powered on and on the network
+2. SSH keys are set up: `ssh-copy-id dyonak@fruit-loops.local`
+3. Hostname is correct (try IP address instead)
+
+### Changes not taking effect
+
+1. Check the service restarted:
+   ```bash
+   ssh dyonak@fruit-loops.local 'systemctl status albumplayer'
+   ```
+
+2. Check for Python errors:
+   ```bash
+   ssh dyonak@fruit-loops.local 'journalctl -u albumplayer -n 20'
+   ```
+
+3. Verify files were synced:
+   ```bash
+   ssh dyonak@fruit-loops.local 'ls -la ~/album-player/*.py'
+   ```
+
+### Service keeps crashing
+
+Check logs for the specific error:
 ```bash
-cd ~/album-player
-docker-compose up -d
-```
-
-### Changes aren't taking effect
-1. Check the container restarted:
-   ```bash
-   ssh pi@raspberrypi.local 'docker ps'
-   ```
-
-2. Verify files were synced:
-   ```bash
-   ssh pi@raspberrypi.local 'ls -la ~/album-player/*.py'
-   ```
-
-3. Check for Python syntax errors in logs:
-   ```bash
-   ssh pi@raspberrypi.local 'docker logs album-player'
-   ```
-
-### Container keeps crashing
-View logs to see the error:
-```bash
-ssh pi@raspberrypi.local 'docker logs album-player'
+journalctl -u albumplayer --no-pager -n 100
 ```
 
 Common issues:
-- Database file permissions (`chmod 777 ~/album_db`)
-- NFC device not accessible (check `--privileged` flag)
-- Sonos speaker not found (check network connectivity)
+- Database permissions: `chmod 755 ~/album_db`
+- NFC device not accessible: Check SPI is enabled
+- Missing dependencies: Re-run `install.sh`
 
-### Want to revert to production mode
-On the Pi, edit `docker-compose.yml` and comment out all the volume mounts except the database:
-```yaml
-volumes:
-  - ${HOME}/album_db:/app/db
-  # Comment out all the .py file mounts
-```
+### Testing without services
 
-Then restart:
+Stop services and run manually for debugging:
+
 ```bash
-docker-compose up -d
+# On the Pi
+sudo systemctl stop albumplayer
+cd ~/album-player
+python3 AlbumPlayer.py
+
+# Or for webapp
+sudo systemctl stop webapp
+python3 Webapp.py
 ```
 
-## Production Deployment
+## Project Structure
 
-For customer units or production deployment:
-
-1. **Use the pre-built image without volume mounts**
-2. Edit `docker-compose.yml` on the Pi to remove all source code volume mounts
-3. Only keep the database volume mount
-
-Example production `docker-compose.yml`:
-```yaml
-version: '3.8'
-
-services:
-  album-player:
-    image: dyonak/albumplayer:latest
-    container_name: album-player
-    restart: unless-stopped
-    privileged: true
-    network_mode: host
-    volumes:
-      - ${HOME}/album_db:/app/db
-    environment:
-      - PYTHONUNBUFFERED=1
+```
+Album-Player/
+├── AlbumPlayer.py        # Main NFC reader and playback logic
+├── Webapp.py             # Flask web interface
+├── PlaybackManager.py    # Orchestrates Sonos/Bluetooth output
+├── SonosController.py    # Sonos speaker control
+├── BluetoothController.py # Bluetooth audio control
+├── BluetoothManager.py   # Bluetooth device management
+├── SpotifyClient.py      # Spotify Web API client
+├── DBConnector.py        # SQLite database access
+├── Registrar.py          # Album registration logic
+├── install.sh            # Installation script
+├── run.sh                # Manual startup script
+├── spotifyd.conf         # Spotify Connect configuration
+├── services/             # systemd service files
+│   ├── albumplayer.service
+│   ├── webapp.service
+│   ├── spotifyd.service
+│   └── wificonnect.service
+├── templates/            # Flask HTML templates
+├── static/               # Static web assets
+└── dev_tools/
+    ├── deploy-to-pi.sh   # Development deploy script
+    └── DEV-WORKFLOW.md   # This file
 ```
 
 ## Tips for Faster Development
 
-1. **Keep logs open in a separate terminal** while developing
-   ```bash
-   ssh pi@raspberrypi.local 'docker logs -f album-player'
-   ```
+1. **Keep logs open** in a separate terminal while coding
 
-2. **Use VS Code Remote SSH** for direct Pi editing (if preferred)
+2. **Use VS Code Remote SSH** for direct Pi editing if preferred
 
-3. **Test locally first** when possible (without NFC hardware)
+3. **Test locally** when possible (some features work without hardware)
 
 4. **Use git branches** for experimental features
 
 5. **Commit working versions** before major changes
+
+## Service Dependencies
+
+```
+albumplayer.service
+  └── Requires: network-online.target, bluetooth.target
+
+webapp.service
+  └── Requires: network-online.target
+
+spotifyd.service
+  └── Requires: network-online.target, sound.target, bluetooth.target, dbus.service
+```
