@@ -122,14 +122,18 @@ class SonosController(AudioController):
 
     def play_album(self, uri: str) -> None:
         """Play an album from its Spotify URI."""
+        self.config.reload()
+
+        # Re-discover if the configured player has changed since startup
+        if not self.player or self.player.player_name != self.config.player:
+            self._discover_player()
+
         if not self.player:
             print("No Sonos player connected")
             return
 
         print(f"Current: {self.now_playing().get('uri', 'None')}")
         print(f"Requested: {uri}")
-
-        self.config.reload()
         self.pause()
         sleep(0.2)
         self.clear_queue()
