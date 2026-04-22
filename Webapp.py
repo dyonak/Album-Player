@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, g, send_file
+from flask import Flask, render_template, request, jsonify, g, send_file, redirect, url_for
 from Registrar import Registrar
 import json
 import random
@@ -8,6 +8,14 @@ from SonosController import SonosController
 from gevent.pywsgi import WSGIServer
 import os
 from config import Config
+
+# Sonos discovery
+try:
+    import soco
+    SOCO_AVAILABLE = True
+except ImportError:
+    soco = None
+    SOCO_AVAILABLE = False
 
 # Bluetooth is optional - may not be available on all systems
 try:
@@ -68,13 +76,78 @@ def delete_album(album_uri):
         logging.error(f"Error deleting album: {e}")
         return jsonify({'status': 'error'}), 500
 
+def discover_sonos_speakers():
+    """Discover Sonos speakers on the network."""
+    if not SOCO_AVAILABLE:
+        return []
+    try:
+        speakers = soco.discover(timeout=5)
+        if speakers:
+            return [{'name': s.player_name, 'ip': s.ip_address} for s in speakers]
+    except Exception as e:
+        logging.error(f"Error discovering Sonos speakers: {e}")
+    return []
+
+
 @app.route('/config')
-def config():
-    config = Config()
-    config.reload()
-    #Turn the config attributes into a list for passing to the jinja template
-    configdict = vars(config)
-    return render_template('config.html', config=configdict)
+def config_redirect():
+    """Redirect old /config to new /settings."""
+    return redirect(url_for('settings'))
+
+
+@app.route('/settings')
+def settings():
+    """Unified settings page with General, Bluetooth, and Spotify sections."""
+    # Load config
+    cfg = Config()
+    cfg.reload()
+    configdict = vars(cfg)
+
+    # Discover Sonos speakers
+    sonos_speakers = discover_sonos_speakers()
+
+    # Bluetooth data
+    bt_powered = False
+    bt_devices = []
+    bt_paired_devices = []
+    bt_connected_device = None
+    bluetooth_unavailable = not BLUETOOTH_AVAILABLE
+
+    if BLUETOOTH_AVAILABLE:
+        bt_powered = bt.is_powered()
+        bt_devices = bt.get_devices() if bt_powered else []
+        bt_paired_devices = [d for d in bt_devices if d.paired]
+        bt_connected_device = bt.get_connected_device() if bt_powered else None
+
+    # Spotify data
+    spotify_available = SPOTIFY_CLIENT_AVAILABLE
+    spotify_authenticated = False
+    spotify_auth_url = None
+    spotify_devices = []
+    spotify_error = request.args.get('spotify_error')
+    spotify_success = 'Spotify connected successfully!' if request.args.get('spotify_success') else None
+
+    if SPOTIFY_CLIENT_AVAILABLE:
+        spotify_authenticated = spotify_client.is_authenticated()
+        spotify_auth_url = spotify_client.get_auth_url() if not spotify_authenticated else None
+        spotify_devices = spotify_client.get_devices() if spotify_authenticated else []
+
+    return render_template('settings.html',
+                           config=configdict,
+                           sonos_speakers=sonos_speakers,
+                           # Bluetooth
+                           bluetooth_unavailable=bluetooth_unavailable,
+                           bt_powered=bt_powered,
+                           bt_devices=bt_devices,
+                           bt_paired_devices=bt_paired_devices,
+                           bt_connected_device=bt_connected_device,
+                           # Spotify
+                           spotify_available=spotify_available,
+                           spotify_authenticated=spotify_authenticated,
+                           spotify_auth_url=spotify_auth_url,
+                           spotify_devices=spotify_devices,
+                           spotify_error=spotify_error,
+                           spotify_success=spotify_success)
 
 @app.route('/save', methods=['POST'])
 def save_config():
@@ -135,26 +208,8 @@ def play_album(album_uri):
 
 @app.route('/bluetooth')
 def bluetooth():
-    """Bluetooth management page."""
-    if not BLUETOOTH_AVAILABLE:
-        return render_template('bluetooth.html',
-                               powered=False,
-                               devices=[],
-                               paired_devices=[],
-                               connected_device=None,
-                               bluetooth_unavailable=True)
-
-    powered = bt.is_powered()
-    devices = bt.get_devices() if powered else []
-    paired_devices = [d for d in devices if d.paired]
-    connected_device = bt.get_connected_device() if powered else None
-
-    return render_template('bluetooth.html',
-                           powered=powered,
-                           devices=devices,
-                           paired_devices=paired_devices,
-                           connected_device=connected_device,
-                           bluetooth_unavailable=False)
+    """Redirect to settings page with Bluetooth tab."""
+    return redirect(url_for('settings') + '#bluetooth')
 
 
 @app.route('/bluetooth/power', methods=['POST'])
@@ -273,23 +328,8 @@ def bluetooth_remove():
 
 @app.route('/spotify/setup')
 def spotify_setup():
-    """Spotify OAuth setup page."""
-    if not SPOTIFY_CLIENT_AVAILABLE:
-        return render_template('spotify_setup.html',
-                               available=False,
-                               authenticated=False,
-                               auth_url=None,
-                               devices=[])
-
-    authenticated = spotify_client.is_authenticated()
-    auth_url = spotify_client.get_auth_url() if not authenticated else None
-    devices = spotify_client.get_devices() if authenticated else []
-
-    return render_template('spotify_setup.html',
-                           available=True,
-                           authenticated=authenticated,
-                           auth_url=auth_url,
-                           devices=devices)
+    """Redirect to settings page with Spotify tab."""
+    return redirect(url_for('settings') + '#spotify')
 
 
 @app.route('/spotify/callback')
@@ -302,34 +342,16 @@ def spotify_callback():
     error = request.args.get('error')
 
     if error:
-        return render_template('spotify_setup.html',
-                               available=True,
-                               authenticated=False,
-                               auth_url=spotify_client.get_auth_url(),
-                               devices=[],
-                               error=f"Authorization error: {error}")
+        # Redirect to settings with error (stored in session or URL param)
+        return redirect(url_for('settings') + '?spotify_error=' + error + '#spotify')
 
     if code:
         if spotify_client.complete_auth(code):
-            return render_template('spotify_setup.html',
-                                   available=True,
-                                   authenticated=True,
-                                   auth_url=None,
-                                   devices=spotify_client.get_devices(),
-                                   success="Spotify connected successfully!")
+            return redirect(url_for('settings') + '?spotify_success=1#spotify')
         else:
-            return render_template('spotify_setup.html',
-                                   available=True,
-                                   authenticated=False,
-                                   auth_url=spotify_client.get_auth_url(),
-                                   devices=[],
-                                   error="Failed to complete authorization")
+            return redirect(url_for('settings') + '?spotify_error=auth_failed#spotify')
 
-    return render_template('spotify_setup.html',
-                           available=True,
-                           authenticated=spotify_client.is_authenticated(),
-                           auth_url=spotify_client.get_auth_url(),
-                           devices=[])
+    return redirect(url_for('settings') + '#spotify')
 
 
 @app.route('/spotify/auth', methods=['POST'])
