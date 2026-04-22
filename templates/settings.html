@@ -52,13 +52,15 @@
         </button>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="bluetooth-tab" data-bs-toggle="tab" data-bs-target="#bluetooth" type="button" role="tab">
-            <i class="bi bi-bluetooth"></i> Bluetooth
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="spotify-tab" data-bs-toggle="tab" data-bs-target="#spotify" type="button" role="tab">
-            <i class="bi bi-spotify"></i> Spotify
+        <button class="nav-link" id="output-tab" data-bs-toggle="tab" data-bs-target="#output" type="button" role="tab">
+            <i class="bi bi-speaker"></i> Output
+            {% if output_status == 'configured' %}
+            <i class="bi bi-check-circle-fill text-success ms-1"></i>
+            {% elif output_status == 'warning' %}
+            <i class="bi bi-exclamation-triangle-fill text-warning ms-1"></i>
+            {% else %}
+            <i class="bi bi-x-circle-fill text-danger ms-1"></i>
+            {% endif %}
         </button>
     </li>
 </ul>
@@ -136,144 +138,8 @@
         </div>
     </div>
 
-    <!-- ==================== BLUETOOTH TAB ==================== -->
-    <div class="tab-pane fade settings-section" id="bluetooth" role="tabpanel">
-        {% if bluetooth_unavailable %}
-        <!-- Bluetooth Not Available Message -->
-        <div class="alert alert-warning">
-            <h5><i class="bi bi-exclamation-triangle"></i> Bluetooth Not Available</h5>
-            <p class="mb-0">
-                Bluetooth management is not available. Check that the system has Bluetooth hardware and the BlueZ service is running.
-            </p>
-        </div>
-        {% else %}
-        <!-- Status Bar -->
-        <div class="card mb-4">
-            <div class="card-body d-flex justify-content-between align-items-center flex-wrap">
-                <div class="mb-2 mb-md-0">
-                    <strong>Bluetooth:</strong>
-                    <span id="bt-power-status" class="badge {{ 'bg-success' if bt_powered else 'bg-secondary' }}">
-                        {{ 'ON' if bt_powered else 'OFF' }}
-                    </span>
-                    {% if bt_connected_device %}
-                    <span class="ms-3">
-                        <strong>Connected:</strong>
-                        <span class="badge bg-primary">{{ bt_connected_device.name }}</span>
-                    </span>
-                    {% endif %}
-                </div>
-                <div>
-                    <button id="btn-power" class="btn btn-sm {{ 'btn-outline-danger' if bt_powered else 'btn-outline-success' }}" onclick="toggleBtPower()">
-                        {{ 'Turn Off' if bt_powered else 'Turn On' }}
-                    </button>
-                    <button id="btn-scan" class="btn btn-sm btn-outline-primary ms-2" onclick="startBtScan()" {{ 'disabled' if not bt_powered else '' }}>
-                        <i class="bi bi-search"></i> Scan
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Scanning indicator -->
-        <div id="bt-scanning-indicator" class="mb-3" style="display: none;">
-            <div class="alert alert-info d-flex align-items-center">
-                <div class="scanning-indicator me-2"></div>
-                <span>Scanning for Bluetooth devices...</span>
-            </div>
-        </div>
-
-        <!-- Connected Device -->
-        {% if bt_connected_device %}
-        <div class="mb-4">
-            <h5>Connected Device</h5>
-            <div class="card border-success">
-                <div class="card-body d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="mb-1">
-                            <i class="bi bi-speaker-fill text-success"></i>
-                            {{ bt_connected_device.name }}
-                        </h5>
-                        <small class="text-muted">{{ bt_connected_device.address }}</small>
-                    </div>
-                    <button class="btn btn-outline-danger" onclick="disconnectBtDevice('{{ bt_connected_device.address }}')">
-                        Disconnect
-                    </button>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Paired Devices -->
-        <div class="mb-4">
-            <h5>Paired Devices</h5>
-            <div id="paired-devices">
-                {% for device in bt_paired_devices %}
-                {% if not device.connected %}
-                <div class="card device-card mb-2">
-                    <div class="card-body d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="mb-1">
-                                <i class="bi bi-speaker"></i>
-                                {{ device.name }}
-                            </h6>
-                            <small class="text-muted">{{ device.address }}</small>
-                        </div>
-                        <div>
-                            <button class="btn btn-sm btn-success action-btn" onclick="connectBtDevice('{{ device.address }}')">
-                                Connect
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger ms-2" onclick="removeBtDevice('{{ device.address }}')">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
-                {% else %}
-                <p class="text-muted">No paired devices. Click "Scan" to find nearby speakers.</p>
-                {% endfor %}
-            </div>
-        </div>
-
-        <!-- Available Devices -->
-        <div>
-            <h5>Available Devices</h5>
-            <div id="available-devices">
-                {% for device in bt_devices %}
-                {% if not device.paired %}
-                <div class="card device-card mb-2">
-                    <div class="card-body d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="mb-1">
-                                <i class="bi bi-bluetooth"></i>
-                                {{ device.name }}
-                            </h6>
-                            <small class="text-muted">{{ device.address }}</small>
-                        </div>
-                        <button class="btn btn-sm btn-outline-primary action-btn" onclick="pairBtDevice('{{ device.address }}')">
-                            Pair
-                        </button>
-                    </div>
-                </div>
-                {% endif %}
-                {% else %}
-                <p class="text-muted">No unpaired devices found. Click "Scan" to search.</p>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
-    </div>
-
-    <!-- ==================== SPOTIFY TAB ==================== -->
-    <div class="tab-pane fade settings-section" id="spotify" role="tabpanel">
-        {% if not spotify_available %}
-        <!-- SpotifyClient Not Available -->
-        <div class="alert alert-warning">
-            <h5><i class="bi bi-exclamation-triangle"></i> Spotify Client Not Available</h5>
-            <p class="mb-0">
-                SpotifyClient module is not available. This is needed for Bluetooth speaker playback.
-            </p>
-        </div>
-        {% else %}
+    <!-- ==================== OUTPUT TAB ==================== -->
+    <div class="tab-pane fade settings-section" id="output" role="tabpanel">
 
         {% if spotify_error %}
         <div class="alert alert-danger alert-dismissible fade show" role="alert">
@@ -289,73 +155,59 @@
         </div>
         {% endif %}
 
-        <div class="row">
-            <!-- Status Card -->
-            <div class="col-md-6 mb-4">
-                <div class="card">
-                    <div class="card-header">
-                        <strong>Spotify API Status</strong>
-                    </div>
-                    <div class="card-body">
-                        <p>
-                            <strong>Status:</strong>
-                            {% if spotify_authenticated %}
-                            <span class="badge bg-success">Connected</span>
-                            {% else %}
-                            <span class="badge bg-warning">Not Connected</span>
-                            {% endif %}
-                        </p>
-
-                        {% if not spotify_authenticated %}
-                        <hr>
-                        <h6>Setup Instructions</h6>
-                        <ol class="small">
-                            <li>Click the "Connect Spotify" button below</li>
-                            <li>Log in to your Spotify account and authorize</li>
-                            <li>You'll be redirected to a localhost URL (this is expected)</li>
-                            <li>Copy the <code>code</code> parameter from the URL</li>
-                            <li>Paste it in the box below</li>
-                        </ol>
-                        <p class="small text-muted">
-                            <strong>Example:</strong> If redirected to <code>http://127.0.0.1:8888/callback?code=AQB...xyz</code>,
-                            copy everything after <code>code=</code>
-                        </p>
-                        <p class="small text-muted">
-                            <strong>Note:</strong> Spotify Premium is required for playback control.
-                        </p>
-
-                        {% if spotify_auth_url %}
-                        <a href="{{ spotify_auth_url }}" class="btn btn-success" target="_blank">
-                            <i class="bi bi-spotify"></i> Connect Spotify
-                        </a>
-                        {% endif %}
-
-                        <hr>
-                        <h6>Enter Authorization Code</h6>
-                        <p class="small text-muted">
-                            Paste the <code>code</code> from the redirect URL here:
-                        </p>
-                        <div class="input-group mb-3">
-                            <input type="text" class="form-control" id="spotify-auth-code" placeholder="AQB...xyz">
-                            <button class="btn btn-outline-primary" type="button" onclick="submitSpotifyAuthCode()">Submit</button>
-                        </div>
-                        {% endif %}
-                    </div>
-                </div>
+        <!-- ========== SPOTIFY SECTION ========== -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong><i class="bi bi-spotify"></i> Spotify</strong>
+                {% if spotify_authenticated %}
+                <span class="badge bg-success"><i class="bi bi-check-circle"></i> Connected</span>
+                {% else %}
+                <span class="badge bg-danger"><i class="bi bi-x-circle"></i> Not Connected</span>
+                {% endif %}
             </div>
+            <div class="card-body">
+                {% if not spotify_available %}
+                <div class="alert alert-warning mb-0">
+                    <i class="bi bi-exclamation-triangle"></i> SpotifyClient module is not available.
+                </div>
+                {% elif not spotify_authenticated %}
+                <h6>Setup Instructions</h6>
+                <ol class="small">
+                    <li>Click "Connect Spotify" below</li>
+                    <li>Log in and authorize the app</li>
+                    <li>You'll see a "connection refused" page - <strong>this is expected!</strong></li>
+                    <li>Copy the <strong>entire URL</strong> from your browser's address bar</li>
+                    <li>Paste it below and click Connect</li>
+                </ol>
+                <p class="small text-muted mb-2">
+                    <i class="bi bi-lightbulb"></i> Tip: Press Ctrl+L (Cmd+L on Mac) then Ctrl+C to quickly copy the URL
+                </p>
+                <p class="small text-muted mb-3">
+                    <i class="bi bi-info-circle"></i> Spotify Premium is required for playback control.
+                </p>
 
-            {% if spotify_authenticated %}
-            <!-- Spotify Devices -->
-            <div class="col-md-6 mb-4">
-                <div class="card">
-                    <div class="card-header">
-                        <strong>Spotify Connect Devices</strong>
-                    </div>
-                    <div class="card-body">
+                {% if spotify_auth_url %}
+                <a href="{{ spotify_auth_url }}" class="btn btn-success mb-3" target="_blank">
+                    <i class="bi bi-spotify"></i> Connect Spotify
+                </a>
+                {% endif %}
+
+                <div class="input-group">
+                    <input type="text" class="form-control" id="spotify-auth-input"
+                           placeholder="Paste the full URL here...">
+                    <button class="btn btn-success" type="button" onclick="submitSpotifyAuth()">
+                        <i class="bi bi-check-lg"></i> Connect
+                    </button>
+                </div>
+                {% else %}
+                <!-- Authenticated - show devices -->
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Spotify Connect Devices</h6>
                         {% if spotify_devices %}
                         <ul class="list-group list-group-flush">
                             {% for device in spotify_devices %}
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <li class="list-group-item d-flex justify-content-between align-items-center px-0">
                                 <div>
                                     <strong>{{ device.name }}</strong>
                                     <br>
@@ -369,49 +221,173 @@
                         </ul>
                         {% else %}
                         <p class="text-muted mb-0">
-                            No devices found. Make sure spotifyd is running on the Pi.
+                            No devices found. Make sure spotifyd is running.
                         </p>
                         {% endif %}
+                    </div>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm mt-3" onclick="refreshSpotifyDevices()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh Devices
+                </button>
+                {% endif %}
+            </div>
+        </div>
 
-                        <hr>
-                        <button class="btn btn-outline-secondary btn-sm" onclick="refreshSpotifyDevices()">
-                            <i class="bi bi-arrow-clockwise"></i> Refresh Devices
+        <!-- ========== BLUETOOTH SECTION ========== -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong><i class="bi bi-bluetooth"></i> Bluetooth</strong>
+                {% if bt_connected_device %}
+                <span class="badge bg-success"><i class="bi bi-check-circle"></i> {{ bt_connected_device.name }}</span>
+                {% elif bt_paired_devices %}
+                <span class="badge bg-warning"><i class="bi bi-exclamation-triangle"></i> Paired (Disconnected)</span>
+                {% else %}
+                <span class="badge bg-secondary"><i class="bi bi-x-circle"></i> Not Configured</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if bluetooth_unavailable %}
+                <div class="alert alert-warning mb-0">
+                    <i class="bi bi-exclamation-triangle"></i> Bluetooth is not available. Check that the system has Bluetooth hardware and the BlueZ service is running.
+                </div>
+                {% else %}
+                <!-- Bluetooth Controls -->
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <strong>Bluetooth:</strong>
+                        <span id="bt-power-status" class="badge {{ 'bg-success' if bt_powered else 'bg-secondary' }} ms-1">
+                            {{ 'ON' if bt_powered else 'OFF' }}
+                        </span>
+                    </div>
+                    <div>
+                        <button id="btn-power" class="btn btn-sm {{ 'btn-outline-danger' if bt_powered else 'btn-outline-success' }}" onclick="toggleBtPower()">
+                            {{ 'Turn Off' if bt_powered else 'Turn On' }}
+                        </button>
+                        <button id="btn-scan" class="btn btn-sm btn-outline-primary ms-2" onclick="startBtScan()" {{ 'disabled' if not bt_powered else '' }}>
+                            <i class="bi bi-search"></i> Scan
                         </button>
                     </div>
                 </div>
+
+                <!-- Scanning indicator -->
+                <div id="bt-scanning-indicator" class="mb-3" style="display: none;">
+                    <div class="alert alert-info d-flex align-items-center mb-0">
+                        <div class="scanning-indicator me-2"></div>
+                        <span>Scanning for Bluetooth devices...</span>
+                    </div>
+                </div>
+
+                <!-- Connected Device -->
+                {% if bt_connected_device %}
+                <div class="mb-3">
+                    <h6>Connected</h6>
+                    <div class="card border-success">
+                        <div class="card-body d-flex justify-content-between align-items-center py-2">
+                            <div>
+                                <i class="bi bi-speaker-fill text-success"></i>
+                                <strong>{{ bt_connected_device.name }}</strong>
+                                <small class="text-muted ms-2">{{ bt_connected_device.address }}</small>
+                            </div>
+                            <button class="btn btn-sm btn-outline-danger" onclick="disconnectBtDevice('{{ bt_connected_device.address }}')">
+                                Disconnect
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Paired Devices -->
+                {% if bt_paired_devices %}
+                <div class="mb-3">
+                    <h6>Paired Devices</h6>
+                    {% for device in bt_paired_devices %}
+                    {% if not device.connected %}
+                    <div class="card device-card mb-2">
+                        <div class="card-body d-flex justify-content-between align-items-center py-2">
+                            <div>
+                                <i class="bi bi-speaker"></i>
+                                <strong>{{ device.name }}</strong>
+                                <small class="text-muted ms-2">{{ device.address }}</small>
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-success" onclick="connectBtDevice('{{ device.address }}')">
+                                    Connect
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger ms-1" onclick="removeBtDevice('{{ device.address }}')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Available Devices -->
+                <div>
+                    <h6>Available Devices</h6>
+                    <div id="available-devices">
+                        {% set has_unpaired = namespace(value=false) %}
+                        {% for device in bt_devices %}
+                            {% if not device.paired %}
+                                {% set has_unpaired.value = true %}
+                            {% endif %}
+                        {% endfor %}
+                        {% if has_unpaired.value %}
+                            {% for device in bt_devices %}
+                            {% if not device.paired %}
+                            <div class="card device-card mb-2">
+                                <div class="card-body d-flex justify-content-between align-items-center py-2">
+                                    <div>
+                                        <i class="bi bi-bluetooth"></i>
+                                        <strong>{{ device.name }}</strong>
+                                        <small class="text-muted ms-2">{{ device.address }}</small>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="pairBtDevice('{{ device.address }}')">
+                                        Pair
+                                    </button>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% endfor %}
+                        {% else %}
+                        <p class="text-muted mb-0">No unpaired devices found. Click "Scan" to search.</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
             </div>
-            {% endif %}
         </div>
 
         <!-- How It Works -->
         <div class="card">
             <div class="card-header">
-                <strong>How Bluetooth Playback Works</strong>
+                <strong><i class="bi bi-info-circle"></i> How It Works</strong>
             </div>
             <div class="card-body">
                 <div class="row">
                     <div class="col-md-4">
-                        <h6>1. Connect Bluetooth</h6>
-                        <p class="small text-muted">
-                            Pair your Bluetooth speaker using the Bluetooth tab above.
+                        <h6>1. Connect Output</h6>
+                        <p class="small text-muted mb-0">
+                            Connect Spotify (required) and optionally pair a Bluetooth speaker.
                         </p>
                     </div>
                     <div class="col-md-4">
-                        <h6>2. Connect Spotify</h6>
-                        <p class="small text-muted">
-                            Authorize Spotify on this page to allow playback control.
+                        <h6>2. Start spotifyd</h6>
+                        <p class="small text-muted mb-0">
+                            The spotifyd service runs on the Pi as a Spotify Connect device.
                         </p>
                     </div>
                     <div class="col-md-4">
                         <h6>3. Play Music</h6>
-                        <p class="small text-muted">
-                            Scan an NFC tag - if Bluetooth is connected, music plays on your speaker!
+                        <p class="small text-muted mb-0">
+                            Scan an NFC tag and music plays through your connected output!
                         </p>
                     </div>
                 </div>
             </div>
         </div>
-        {% endif %}
     </div>
 </div>
 
@@ -598,10 +574,28 @@
     }
 
     // ==================== Spotify Functions ====================
-    function submitSpotifyAuthCode() {
-        const code = document.getElementById('spotify-auth-code').value.trim();
+    function submitSpotifyAuth() {
+        const input = document.getElementById('spotify-auth-input').value.trim();
+        if (!input) {
+            showAlert('Please paste the URL from your browser', 'warning');
+            return;
+        }
+
+        // Extract code from URL if full URL was pasted
+        let code = input;
+        if (input.includes('code=')) {
+            try {
+                const url = new URL(input);
+                code = url.searchParams.get('code') || code;
+            } catch (e) {
+                // Maybe it's just a partial URL or code with prefix
+                const match = input.match(/code=([^&]+)/);
+                if (match) code = match[1];
+            }
+        }
+
         if (!code) {
-            alert('Please enter an authorization code');
+            showAlert('Could not find authorization code in the URL', 'danger');
             return;
         }
 
@@ -613,13 +607,14 @@
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
-                location.reload();
+                showAlert('Spotify connected successfully!', 'success');
+                setTimeout(() => location.reload(), 1000);
             } else {
-                alert('Authorization failed: ' + (data.error || 'Unknown error'));
+                showAlert('Authorization failed: ' + (data.error || 'Unknown error'), 'danger');
             }
         })
         .catch(error => {
-            alert('Error: ' + error);
+            showAlert('Error: ' + error, 'danger');
         });
     }
 

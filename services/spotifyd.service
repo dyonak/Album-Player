@@ -6,14 +6,14 @@ Requires=dbus.service
 
 [Service]
 Type=simple
-User=dyonak
+User=__USER__
 
 # D-Bus and PulseAudio environment for headless operation
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=PULSE_RUNTIME_PATH=/run/user/1000/pulse
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/__UID__/bus
+Environment=XDG_RUNTIME_DIR=/run/user/__UID__
+Environment=PULSE_RUNTIME_PATH=/run/user/__UID__/pulse
 
-ExecStart=/usr/local/bin/spotifyd --no-daemon --config-path /home/dyonak/.config/spotifyd/spotifyd.conf
+ExecStart=/usr/local/bin/spotifyd --no-daemon --config-path __HOME__/.config/spotifyd/spotifyd.conf
 Restart=on-failure
 RestartSec=5
 

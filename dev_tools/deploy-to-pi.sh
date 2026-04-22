@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 # Configuration (override with environment variables)
 PI_USER="${PI_USER:-dyonak}"
 PI_HOST="${PI_HOST:-fruit-loops.local}"
-PI_CODE_DIR="${PI_CODE_DIR:-/home/${PI_USER}/album-player}"
+PI_CODE_DIR="${PI_CODE_DIR:-/home/${PI_USER}/Album-Player}"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -65,8 +65,14 @@ echo -e "${GREEN}Files synced${NC}"
 
 # Step 4: Update service files and configs
 echo -e "${YELLOW}[4/5] Updating service files and configs...${NC}"
-ssh ${PI_USER}@${PI_HOST} << 'ENDSSH'
-cd ~/album-player
+ssh ${PI_USER}@${PI_HOST} << ENDSSH
+cd ${PI_CODE_DIR}
+
+# Get current user info for service file substitution
+CURRENT_USER=\$(whoami)
+CURRENT_HOME=\$(eval echo ~\$CURRENT_USER)
+CURRENT_UID=\$(id -u)
+INSTALL_DIR="${PI_CODE_DIR}"
 
 # Update spotifyd config
 if [ -f spotifyd.conf ]; then
@@ -75,10 +81,14 @@ if [ -f spotifyd.conf ]; then
     echo "  spotifyd.conf updated"
 fi
 
-# Update service files if changed
+# Update service files with placeholder substitution
 for service in wificonnect webapp spotifyd albumplayer; do
-    if [ -f "services/${service}.service" ]; then
-        sudo cp "services/${service}.service" /etc/systemd/system/
+    if [ -f "services/\${service}.service" ]; then
+        sed -e "s|__USER__|\${CURRENT_USER}|g" \\
+            -e "s|__HOME__|\${CURRENT_HOME}|g" \\
+            -e "s|__UID__|\${CURRENT_UID}|g" \\
+            -e "s|__INSTALL_DIR__|\${INSTALL_DIR}|g" \\
+            "services/\${service}.service" | sudo tee /etc/systemd/system/\${service}.service > /dev/null
     fi
 done
 sudo systemctl daemon-reload

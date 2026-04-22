@@ -39,7 +39,9 @@ Connect the PN532 NFC module to the Pi via SPI:
 | SCK       | GPIO 11 / SCLK (Pin 23) |
 | MISO      | GPIO 9 / MISO (Pin 21) |
 | MOSI      | GPIO 10 / MOSI (Pin 19) |
-| SS/CS     | GPIO 8 / CE0 (Pin 24) |
+| SS/CS     | GPIO 8 / CE0 (Pin 24)* |
+
+*Note: The CS pin varies by board. Waveshare HAT uses GPIO 4, Adafruit uses GPIO 7. See Troubleshooting if your reader isn't detected.
 
 Set the PN532 DIP switches to SPI mode.
 
@@ -160,6 +162,29 @@ ls /dev/spidev*
 sudo raspi-config
 # Interface Options → SPI → Enable
 sudo reboot
+```
+
+### NFC reader detected but not working (wrong GPIO pin)
+
+Different PN532 boards use different GPIO pins for the chip select (CS) line. If your reader is not detected, you may need to edit `NFCPoller.py` to use the correct pin.
+
+| Board | Pin | GPIO |
+|-------|-----|------|
+| Standard PN532 breakout | `board.D8` | GPIO 8 (CE0) |
+| Adafruit PN532 | `board.D7` | GPIO 7 (CE1) |
+| Waveshare PN532 NFC HAT | `board.D4` | GPIO 4 |
+
+Edit line 22 in `NFCPoller.py`:
+```python
+# Change this line to match your board:
+self.cs_pin = DigitalInOut(board.D4)  # Waveshare HAT
+# self.cs_pin = DigitalInOut(board.D8)  # Standard breakout (default)
+# self.cs_pin = DigitalInOut(board.D7)  # Adafruit PN532
+```
+
+After changing, restart the service:
+```bash
+sudo systemctl restart albumplayer
 ```
 
 ### spotifyd not showing as Spotify device

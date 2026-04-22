@@ -89,6 +89,32 @@ def discover_sonos_speakers():
     return []
 
 
+def get_output_status():
+    """
+    Returns output configuration status for the Output tab indicator.
+    Returns: 'configured', 'warning', or 'not_configured'
+    """
+    spotify_ok = SPOTIFY_CLIENT_AVAILABLE and spotify_client and spotify_client.is_authenticated()
+
+    bt_paired = False
+    bt_connected = False
+    if BLUETOOTH_AVAILABLE and bt:
+        try:
+            if bt.is_powered():
+                devices = bt.get_devices()
+                bt_paired = any(d.paired for d in devices)
+                bt_connected = bt.get_connected_device() is not None
+        except Exception:
+            pass
+
+    if spotify_ok or bt_connected:
+        return 'configured'
+    elif bt_paired and not bt_connected:
+        return 'warning'
+    else:
+        return 'not_configured'
+
+
 @app.route('/config')
 def config_redirect():
     """Redirect old /config to new /settings."""
@@ -132,9 +158,14 @@ def settings():
         spotify_auth_url = spotify_client.get_auth_url() if not spotify_authenticated else None
         spotify_devices = spotify_client.get_devices() if spotify_authenticated else []
 
+    # Calculate output status for tab indicator
+    output_status = get_output_status()
+
     return render_template('settings.html',
                            config=configdict,
                            sonos_speakers=sonos_speakers,
+                           # Output status
+                           output_status=output_status,
                            # Bluetooth
                            bluetooth_unavailable=bluetooth_unavailable,
                            bt_powered=bt_powered,
@@ -356,15 +387,27 @@ def spotify_callback():
 
 @app.route('/spotify/auth', methods=['POST'])
 def spotify_auth():
-    """Submit OAuth code manually (for headless setup)."""
+    """Submit OAuth code (accepts full URL or just code)."""
     if not SPOTIFY_CLIENT_AVAILABLE:
         return jsonify({'status': 'error', 'error': 'SpotifyClient not available'}), 503
 
     data = request.get_json()
-    code = data.get('code', '').strip()
+    code_or_url = data.get('code', '').strip()
 
-    if not code:
+    if not code_or_url:
         return jsonify({'status': 'error', 'error': 'No code provided'}), 400
+
+    # Extract code from URL if full URL was provided
+    code = code_or_url
+    if 'code=' in code_or_url:
+        from urllib.parse import urlparse, parse_qs
+        try:
+            parsed = urlparse(code_or_url)
+            params = parse_qs(parsed.query)
+            if 'code' in params:
+                code = params['code'][0]
+        except Exception:
+            pass
 
     if spotify_client.complete_auth(code):
         return jsonify({'status': 'success'})

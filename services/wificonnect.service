@@ -5,9 +5,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/dyonak/album-player
+WorkingDirectory=__INSTALL_DIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -u /home/dyonak/album-player/wificonnect.py
+ExecStart=/usr/bin/python3 -u __INSTALL_DIR__/wificonnect.py
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure

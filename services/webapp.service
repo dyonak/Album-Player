@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=dyonak
-WorkingDirectory=/home/dyonak/album-player
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 /home/dyonak/album-player/Webapp.py
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/Webapp.py
 Restart=on-failure
 RestartSec=5
 

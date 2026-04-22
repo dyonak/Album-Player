@@ -14,6 +14,17 @@ echo ""
 ARCH=$(uname -m)
 DEB_ARCH=$(dpkg --print-architecture)
 echo "Detected architecture: $ARCH ($DEB_ARCH)"
+
+# Detect user, paths, and UID
+CURRENT_USER=$(whoami)
+CURRENT_HOME=$(eval echo ~$CURRENT_USER)
+CURRENT_UID=$(id -u)
+# Install directory is where this script is located (the cloned repo)
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "User: $CURRENT_USER (UID: $CURRENT_UID)"
+echo "Home: $CURRENT_HOME"
+echo "Install directory: $INSTALL_DIR"
 echo ""
 
 # Step 1: Update system
@@ -128,39 +139,36 @@ echo "  spotifyd config installed to ~/.config/spotifyd/"
 
 # Step 8: Set up systemd services
 echo "[8/10] Setting up systemd services..."
-mkdir -p ~/album-player
 
-# WiFi provisioning service
-if [ -f services/wificonnect.service ]; then
-    sudo cp services/wificonnect.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable wificonnect.service
-    echo "  - wificonnect.service installed"
-fi
+# Function to install a service file with placeholder replacement
+install_service() {
+    local service_name=$1
+    local service_file="services/${service_name}.service"
 
-# Webapp service
-if [ -f services/webapp.service ]; then
-    sudo cp services/webapp.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable webapp.service
-    echo "  - webapp.service installed"
-fi
+    if [ -f "$service_file" ]; then
+        # Replace placeholders and install
+        sed -e "s|__USER__|${CURRENT_USER}|g" \
+            -e "s|__HOME__|${CURRENT_HOME}|g" \
+            -e "s|__UID__|${CURRENT_UID}|g" \
+            -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+            "$service_file" | sudo tee /etc/systemd/system/${service_name}.service > /dev/null
+        echo "  - ${service_name}.service installed"
+    fi
+}
 
-# spotifyd service
-if [ -f services/spotifyd.service ]; then
-    sudo cp services/spotifyd.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable spotifyd.service
-    echo "  - spotifyd.service installed"
-fi
+# Install all services
+install_service "wificonnect"
+install_service "webapp"
+install_service "spotifyd"
+install_service "albumplayer"
 
-# Album Player service (NFC + playback)
-if [ -f services/albumplayer.service ]; then
-    sudo cp services/albumplayer.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable albumplayer.service
-    echo "  - albumplayer.service installed"
-fi
+# Reload systemd and enable services
+sudo systemctl daemon-reload
+sudo systemctl enable wificonnect.service 2>/dev/null || true
+sudo systemctl enable webapp.service 2>/dev/null || true
+sudo systemctl enable spotifyd.service 2>/dev/null || true
+sudo systemctl enable albumplayer.service 2>/dev/null || true
+echo "  Services enabled"
 
 # Step 9: Configure user permissions
 echo "[9/10] Configuring user permissions..."
