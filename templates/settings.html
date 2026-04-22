@@ -14,9 +14,6 @@
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
-    .status-badge {
-        font-size: 0.75rem;
-    }
     .scanning-indicator {
         display: inline-block;
         width: 12px;
@@ -52,12 +49,20 @@
         </button>
     </li>
     <li class="nav-item" role="presentation">
+        <button class="nav-link" id="source-tab" data-bs-toggle="tab" data-bs-target="#source" type="button" role="tab">
+            <i class="bi bi-music-note-beamed"></i> Source
+            {% if source_status == 'configured' %}
+            <i class="bi bi-check-circle-fill text-success ms-1"></i>
+            {% else %}
+            <i class="bi bi-x-circle-fill text-danger ms-1"></i>
+            {% endif %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
         <button class="nav-link" id="output-tab" data-bs-toggle="tab" data-bs-target="#output" type="button" role="tab">
             <i class="bi bi-speaker"></i> Output
             {% if output_status == 'configured' %}
             <i class="bi bi-check-circle-fill text-success ms-1"></i>
-            {% elif output_status == 'warning' %}
-            <i class="bi bi-exclamation-triangle-fill text-warning ms-1"></i>
             {% else %}
             <i class="bi bi-x-circle-fill text-danger ms-1"></i>
             {% endif %}
@@ -66,80 +71,53 @@
 </ul>
 
 <div class="tab-content" id="settingsTabContent">
-    <!-- ==================== GENERAL SETTINGS TAB ==================== -->
+
+    <!-- ==================== GENERAL TAB ==================== -->
     <div class="tab-pane fade show active settings-section" id="general" role="tabpanel">
         <div class="card">
             <div class="card-header">
                 <strong>General Settings</strong>
             </div>
             <div class="card-body">
-                <form id="config-form">
-                    <!-- Player Selection (Sonos Discovery) -->
-                    <div class="form-group row mb-3">
-                        <label class="form-control-label col-form-label col-sm-3" for="player">
-                            Player
-                        </label>
-                        <div class="col-sm-6">
-                            <select class="form-control" id="player" name="player">
-                                {% if sonos_speakers %}
-                                    {% for speaker in sonos_speakers %}
-                                    <option value="{{ speaker.name }}" {% if config.player == speaker.name %}selected{% endif %}>
-                                        {{ speaker.name }} ({{ speaker.ip }})
-                                    </option>
-                                    {% endfor %}
-                                {% else %}
-                                    <option value="{{ config.player }}" selected>{{ config.player }}</option>
-                                {% endif %}
-                            </select>
-                            <small class="form-text text-muted">
-                                Select a Sonos speaker for playback.
-                                <button type="button" class="btn btn-link btn-sm p-0" onclick="refreshSpeakers()">
-                                    <i class="bi bi-arrow-clockwise"></i> Refresh
-                                </button>
-                            </small>
-                        </div>
+                <!-- Port Setting -->
+                <div class="form-group row mb-3">
+                    <label class="form-control-label col-form-label col-sm-3" for="port">
+                        Port
+                    </label>
+                    <div class="col-sm-6">
+                        <input type="number" class="form-control" id="port" name="port" value="{{ config.port }}">
+                        <small class="form-text text-muted">Web interface port (requires restart)</small>
                     </div>
+                </div>
 
-                    <!-- Port Setting -->
-                    <div class="form-group row mb-3">
-                        <label class="form-control-label col-form-label col-sm-3" for="port">
-                            Port
-                        </label>
-                        <div class="col-sm-6">
-                            <input type="number" class="form-control" id="port" name="port" value="{{ config.port }}">
-                            <small class="form-text text-muted">Web interface port (requires restart)</small>
-                        </div>
+                <!-- Volume Setting -->
+                <div class="form-group row mb-3">
+                    <label class="form-control-label col-form-label col-sm-3" for="volume">
+                        Volume
+                    </label>
+                    <div class="col-sm-6">
+                        <input type="number" class="form-control" id="volume" name="volume" value="{{ config.volume }}" min="0" max="100">
+                        <small class="form-text text-muted">Default playback volume (0-100)</small>
                     </div>
+                </div>
 
-                    <!-- Volume Setting -->
-                    <div class="form-group row mb-3">
-                        <label class="form-control-label col-form-label col-sm-3" for="volume">
-                            Volume
-                        </label>
-                        <div class="col-sm-6">
-                            <input type="number" class="form-control" id="volume" name="volume" value="{{ config.volume }}" min="0" max="100">
-                            <small class="form-text text-muted">Default playback volume (0-100)</small>
-                        </div>
-                    </div>
+                <!-- Hidden inputs for remaining config items (player lives in Output tab) -->
+                {% for key, value in config.items() %}
+                    {% if key not in ['port', 'volume', 'player'] %}
+                    <input type="hidden" name="{{ key }}" value="{{ value }}">
+                    {% endif %}
+                {% endfor %}
 
-                    <!-- Hidden inputs for remaining config items -->
-                    {% for key, value in config.items() %}
-                        {% if key not in ['player', 'port', 'volume'] %}
-                        <input type="hidden" name="{{ key }}" value="{{ value }}">
-                        {% endif %}
-                    {% endfor %}
-
-                    <hr>
-                    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#confirmationModal">
-                        <i class="bi bi-save"></i> Save Settings
-                    </button>
-                </form>
+                <hr>
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#confirmationModal">
+                    <i class="bi bi-save"></i> Save Settings
+                </button>
             </div>
         </div>
     </div>
 
-    <!-- ==================== OUTPUT TAB ==================== -->
-    <div class="tab-pane fade settings-section" id="output" role="tabpanel">
+    <!-- ==================== SOURCE TAB ==================== -->
+    <div class="tab-pane fade settings-section" id="source" role="tabpanel">
 
         {% if spotify_error %}
         <div class="alert alert-danger alert-dismissible fade show" role="alert">
@@ -155,7 +133,7 @@
         </div>
         {% endif %}
 
-        <!-- ========== SPOTIFY SECTION ========== -->
+        <!-- Spotify Card -->
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <strong><i class="bi bi-spotify"></i> Spotify</strong>
@@ -228,6 +206,57 @@
                 </div>
                 <button class="btn btn-outline-secondary btn-sm mt-3" onclick="refreshSpotifyDevices()">
                     <i class="bi bi-arrow-clockwise"></i> Refresh Devices
+                </button>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== OUTPUT TAB ==================== -->
+    <div class="tab-pane fade settings-section" id="output" role="tabpanel">
+
+        <!-- ========== SONOS SECTION ========== -->
+        <div class="card mb-4 {% if not sonos_speakers %}border-secondary{% endif %}">
+            <div class="card-header d-flex justify-content-between align-items-center {% if not sonos_speakers %}text-muted{% endif %}">
+                <strong><i class="bi bi-music-player"></i> Sonos</strong>
+                {% if not sonos_speakers %}
+                <span class="badge bg-secondary">No speakers found</span>
+                {% elif config.player %}
+                <span class="badge bg-success"><i class="bi bi-check-circle"></i> {{ config.player }}</span>
+                {% endif %}
+            </div>
+            <div class="card-body {% if not sonos_speakers %}text-muted{% endif %}">
+                {% if not sonos_speakers %}
+                <div class="alert alert-secondary mb-3">
+                    <i class="bi bi-exclamation-circle"></i> No Sonos speakers were found on the local network.
+                    Make sure your Sonos device is powered on and connected to the same network.
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-2" onclick="refreshSpeakers()">
+                        <i class="bi bi-arrow-clockwise"></i> Retry Discovery
+                    </button>
+                </div>
+                {% else %}
+                <div class="form-group row mb-3">
+                    <label class="form-control-label col-form-label col-sm-3" for="player">
+                        Player
+                    </label>
+                    <div class="col-sm-6">
+                        <select class="form-control" id="player" name="player">
+                            {% for speaker in sonos_speakers %}
+                            <option value="{{ speaker.name }}" {% if config.player == speaker.name %}selected{% endif %}>
+                                {{ speaker.name }} ({{ speaker.ip }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <small class="form-text text-muted">
+                            Select a Sonos speaker for playback.
+                            <button type="button" class="btn btn-link btn-sm p-0" onclick="refreshSpeakers()">
+                                <i class="bi bi-arrow-clockwise"></i> Refresh
+                            </button>
+                        </small>
+                    </div>
+                </div>
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#confirmationModal">
+                    <i class="bi bi-save"></i> Save
                 </button>
                 {% endif %}
             </div>
@@ -360,34 +389,6 @@
             </div>
         </div>
 
-        <!-- How It Works -->
-        <div class="card">
-            <div class="card-header">
-                <strong><i class="bi bi-info-circle"></i> How It Works</strong>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-4">
-                        <h6>1. Connect Output</h6>
-                        <p class="small text-muted mb-0">
-                            Connect Spotify (required) and optionally pair a Bluetooth speaker.
-                        </p>
-                    </div>
-                    <div class="col-md-4">
-                        <h6>2. Start spotifyd</h6>
-                        <p class="small text-muted mb-0">
-                            The spotifyd service runs on the Pi as a Spotify Connect device.
-                        </p>
-                    </div>
-                    <div class="col-md-4">
-                        <h6>3. Play Music</h6>
-                        <p class="small text-muted mb-0">
-                            Scan an NFC tag and music plays through your connected output!
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 
@@ -414,7 +415,6 @@
 {% block scripts %}
 <script>
     // ==================== General Settings Functions ====================
-    const form = document.getElementById("config-form");
     const confirmButton = document.getElementById("confirm-button");
     const confirmationModalElement = document.getElementById("confirmationModal");
     const confirmationModal = new bootstrap.Modal(confirmationModalElement);
@@ -425,15 +425,15 @@
     });
 
     function submitConfigForm() {
-        const formData = new FormData(form);
+        // Collect all named inputs/selects from the entire page
         const jsonData = {};
-        for (const [key, value] of formData.entries()) {
+        document.querySelectorAll('input[name], select[name]').forEach(el => {
             try {
-                jsonData[key] = JSON.parse(value);
+                jsonData[el.name] = JSON.parse(el.value);
             } catch (e) {
-                jsonData[key] = value;
+                jsonData[el.name] = el.value;
             }
-        }
+        });
 
         fetch("/save", {
             method: "POST",
@@ -588,7 +588,6 @@
                 const url = new URL(input);
                 code = url.searchParams.get('code') || code;
             } catch (e) {
-                // Maybe it's just a partial URL or code with prefix
                 const match = input.match(/code=([^&]+)/);
                 if (match) code = match[1];
             }
@@ -623,7 +622,6 @@
     }
 
     // ==================== Tab Persistence ====================
-    // Remember selected tab across page reloads
     document.addEventListener('DOMContentLoaded', function() {
         const activeTab = localStorage.getItem('activeSettingsTab');
         if (activeTab) {
@@ -633,7 +631,6 @@
             }
         }
 
-        // Store active tab on change
         document.querySelectorAll('#settingsTabs button').forEach(tab => {
             tab.addEventListener('shown.bs.tab', function(e) {
                 localStorage.setItem('activeSettingsTab', e.target.getAttribute('data-bs-target'));

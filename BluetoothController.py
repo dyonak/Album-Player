@@ -13,6 +13,7 @@ import time
 from typing import Optional, Dict, Any
 from AudioController import AudioController
 from BluetoothManager import BluetoothManager, BluetoothDevice
+from config import Config
 
 # SpotifyClient is optional
 try:
@@ -38,6 +39,7 @@ class BluetoothController(AudioController):
         self._spotify: Optional['SpotifyClient'] = None
         self._spotify_device_id: Optional[str] = None
         self._spotifyd_running = False
+        self._config = Config()
 
         # Check initial state
         self.refresh_connection()
@@ -249,10 +251,13 @@ class BluetoothController(AudioController):
         self._set_bluetooth_audio_sink()
 
         # Play via Spotify API
+        self._config.reload()
         print(f"Playing via Bluetooth: {uri}")
         success = self._spotify.play_album(uri, device_id=self._spotify_device_id)
 
-        if not success:
+        if success:
+            self.volume(self._config.volume)
+        else:
             print("Spotify API playback failed")
 
     def play_mp3(self, url: str) -> None:

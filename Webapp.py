@@ -89,30 +89,31 @@ def discover_sonos_speakers():
     return []
 
 
-def get_output_status():
-    """
-    Returns output configuration status for the Output tab indicator.
-    Returns: 'configured', 'warning', or 'not_configured'
-    """
-    spotify_ok = SPOTIFY_CLIENT_AVAILABLE and spotify_client and spotify_client.is_authenticated()
+def get_source_status():
+    """Returns source (Spotify) configuration status for the Source tab indicator."""
+    if SPOTIFY_CLIENT_AVAILABLE and spotify_client and spotify_client.is_authenticated():
+        return 'configured'
+    return 'not_configured'
 
-    bt_paired = False
+
+def get_output_status():
+    """Returns output (Sonos/Bluetooth) configuration status for the Output tab indicator.
+    Red if no output is configured (no Sonos player selected AND no BT connected).
+    """
     bt_connected = False
     if BLUETOOTH_AVAILABLE and bt:
         try:
             if bt.is_powered():
-                devices = bt.get_devices()
-                bt_paired = any(d.paired for d in devices)
                 bt_connected = bt.get_connected_device() is not None
         except Exception:
             pass
 
-    if spotify_ok or bt_connected:
+    cfg = Config()
+    sonos_configured = bool(getattr(cfg, 'player', ''))
+
+    if bt_connected or sonos_configured:
         return 'configured'
-    elif bt_paired and not bt_connected:
-        return 'warning'
-    else:
-        return 'not_configured'
+    return 'not_configured'
 
 
 @app.route('/config')
@@ -158,13 +159,15 @@ def settings():
         spotify_auth_url = spotify_client.get_auth_url() if not spotify_authenticated else None
         spotify_devices = spotify_client.get_devices() if spotify_authenticated else []
 
-    # Calculate output status for tab indicator
+    # Calculate tab status indicators
+    source_status = get_source_status()
     output_status = get_output_status()
 
     return render_template('settings.html',
                            config=configdict,
                            sonos_speakers=sonos_speakers,
-                           # Output status
+                           # Tab status indicators
+                           source_status=source_status,
                            output_status=output_status,
                            # Bluetooth
                            bluetooth_unavailable=bluetooth_unavailable,
