@@ -48,8 +48,11 @@ Set the PN532 DIP switches to SPI mode.
 SSH into your Pi and run:
 
 ```bash
+# Install git
+sudo apt install git
+
 # Clone the repository
-git clone https://github.com/yourusername/Album-Player.git
+git clone https://github.com/dyonak/Album-Player.git
 cd Album-Player
 
 # Run the installation script

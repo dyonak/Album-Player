@@ -47,16 +47,16 @@ sudo apt-get install -y \
     python3-flask \
     python3-requests \
     python3-gevent \
-    python3-pip
+    python3-pip \
+    python3-rpi.gpio
 
-# Step 5: Install Python packages
+# Step 5: Install Python packages (via pip for packages not in apt)
 echo "[5/10] Installing Python packages..."
 sudo pip3 install --break-system-packages \
     soco \
     spotipy \
     nfcpy \
     adafruit-circuitpython-pn532 \
-    RPi.GPIO \
     cryptography
 
 # Step 6: Install Bluetooth audio dependencies
